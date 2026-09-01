@@ -1,0 +1,70 @@
+ {
+   "$schema": "http://json-schema.org/draft-07/schema#",
+   "title": "DesktopIconLock Configuration Schema",
+   "type": "object",
+   "required": ["version", "baseProfile", "exactProfiles"],
+   "properties": {
+     "version": {
+       "type": "integer",
+      "description": "配置文件版本；v3在保留物理工作区和网格拓扑的基础上，要求精确Profile运行时校验当前Explorer网格兼容性"
+     },
+     "baseProfile": {
+       "type": ["object", "null"],
+       "description": "基准分辨率配置，用于自适应换算",
+       "properties": {
+         "resolution": { "type": "string" },
+         "dpi": { "type": "integer" },
+         "monitorFingerprint": { "type": "string" },
+         "workAreaWidth": { "type": "integer" },
+         "workAreaHeight": { "type": "integer" },
+         "gridOriginX": { "type": "integer" },
+         "gridOriginY": { "type": "integer" },
+         "gridSpacingX": { "type": "integer" },
+         "gridSpacingY": { "type": "integer" },
+         "icons": {
+           "type": "object",
+           "additionalProperties": {
+             "type": "object",
+             "properties": {
+               "displayName": { "type": "string" },
+               "x": { "type": "integer" },
+               "y": { "type": "integer" }
+             },
+             "required": ["x", "y"]
+           }
+         }
+       }
+     },
+     "exactProfiles": {
+       "type": "array",
+       "description": "已单独精确锁定的分辨率配置列表",
+       "items": {
+         "type": "object",
+         "properties": {
+           "resolution": { "type": "string" },
+         "dpi": { "type": "integer" },
+         "monitorFingerprint": { "type": "string" },
+         "workAreaWidth": { "type": "integer" },
+         "workAreaHeight": { "type": "integer" },
+         "gridOriginX": { "type": "integer" },
+         "gridOriginY": { "type": "integer" },
+         "gridSpacingX": { "type": "integer" },
+         "gridSpacingY": { "type": "integer" },
+           "icons": {
+             "type": "object",
+             "additionalProperties": {
+               "type": "object",
+               "properties": {
+                 "displayName": { "type": "string" },
+                 "x": { "type": "integer" },
+                 "y": { "type": "integer" }
+               },
+               "required": ["x", "y"]
+             }
+           }
+         },
+         "required": ["resolution", "icons"]
+       }
+     }
+   }
+ }

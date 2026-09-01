@@ -1,0 +1,18 @@
+*.log
+logs/
+dist/logs/
+dist/layout*.json
+dist/history/
+artifacts/
+*.exe
+*.pdb
+*.suo
+*.user
+.vs/
+bin/
+obj/
+*.tmp
+
+# 允许追踪 dist 目录下的构建规范，但忽略运行时日志与私有历史截图
+!dist/.gitkeep
+!DesktopIconLock/Config/layout.schema.json
