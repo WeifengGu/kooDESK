@@ -1,8 +1,10 @@
 using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Imaging;
 using System.IO;
-using System.Reflection;
+using System.Runtime.InteropServices;
+using System.Text;
 using System.Threading;
 using System.Windows.Forms;
 using DesktopIconLock.Common;
@@ -11,12 +13,39 @@ namespace DesktopIconLock.Core
 {
     public static class ScreenCaptureService
     {
+        private const int SW_MINIMIZE = 6;
+        private const int SW_RESTORE = 9;
+        private const int WS_MINIMIZE = 0x20000000;
+        private const int GWL_STYLE = -16;
+
+        [DllImport("user32.dll")]
+        private static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
+        private delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+
+        [DllImport("user32.dll")]
+        private static extern bool IsWindowVisible(IntPtr hWnd);
+
+        [DllImport("user32.dll")]
+        private static extern int GetWindowLong(IntPtr hWnd, int nIndex);
+
+        [DllImport("user32.dll")]
+        private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+
+        [DllImport("user32.dll")]
+        private static extern IntPtr GetShellWindow();
+
+        [DllImport("user32.dll")]
+        private static extern IntPtr FindWindow(string lpClassName, string lpWindowName);
+
+        [DllImport("user32.dll", CharSet = CharSet.Auto)]
+        private static extern int GetClassName(IntPtr hWnd, StringBuilder lpClassName, int nMaxCount);
+
         public static void CaptureFullDesktop(string outputPath, string traceId)
         {
             AuditLogger.LogBusinessEntry(
                 "保存历史布局截图",
                 string.Format("输出路径={0}", outputPath),
-                "捕获当前用户完整虚拟桌面的物理像素截图",
+                "捕获纯净无遮挡的桌面物理像素截图",
                 traceId);
 
             string directory = Path.GetDirectoryName(outputPath);
@@ -26,21 +55,51 @@ namespace DesktopIconLock.Core
             }
 
             Rectangle bounds = SystemInformation.VirtualScreen;
-            AuditLogger.LogParamValidation(
-                "保存历史布局截图",
-                "VirtualScreen",
-                "SystemInformation.VirtualScreen",
-                string.Format("{0},{1},{2}x{3}", bounds.Left, bounds.Top, bounds.Width, bounds.Height),
-                "宽高必须大于0",
-                bounds.Width > 0 && bounds.Height > 0,
-                "虚拟桌面尺寸无效",
-                "无法生成历史布局截图",
-                traceId);
-
             if (bounds.Width <= 0 || bounds.Height <= 0)
             {
                 throw new InvalidOperationException("虚拟桌面尺寸无效，无法截图。");
             }
+
+            // 临时最小化遮挡桌面的顶层应用程序窗口，实现“穿透上层软件窗口截取真实桌面”
+            List<IntPtr> minimizedWindows = new List<IntPtr>();
+            IntPtr shellWnd = GetShellWindow();
+            IntPtr progman = FindWindow("Progman", "Program Manager");
+
+            try
+            {
+                EnumWindows(delegate(IntPtr hWnd, IntPtr lParam)
+                {
+                    if (hWnd == shellWnd || hWnd == progman) return true;
+                    if (!IsWindowVisible(hWnd)) return true;
+
+                    StringBuilder sb = new StringBuilder(256);
+                    GetClassName(hWnd, sb, 256);
+                    string className = sb.ToString();
+
+                    // 跳过桌面、壁纸层和系统托盘/任务栏
+                    if (className == "Progman" ||
+                        className == "WorkerW" ||
+                        className == "Shell_TrayWnd" ||
+                        className == "Shell_SecondaryTrayWnd")
+                    {
+                        return true;
+                    }
+
+                    int style = GetWindowLong(hWnd, GWL_STYLE);
+                    if ((style & WS_MINIMIZE) != 0) return true;
+
+                    ShowWindow(hWnd, SW_MINIMIZE);
+                    minimizedWindows.Add(hWnd);
+                    return true;
+                }, IntPtr.Zero);
+
+                // 稍微等待窗口收起动画完成
+                if (minimizedWindows.Count > 0)
+                {
+                    Thread.Sleep(250);
+                }
+            }
+            catch { }
 
             string temporaryPath = outputPath + ".tmp";
             try
@@ -87,6 +146,17 @@ namespace DesktopIconLock.Core
                     ex,
                     traceId);
                 throw;
+            }
+            finally
+            {
+                // 截图完成立即恢复刚才最小化的所有上层窗口
+                if (minimizedWindows.Count > 0)
+                {
+                    for (int i = minimizedWindows.Count - 1; i >= 0; i--)
+                    {
+                        ShowWindow(minimizedWindows[i], SW_RESTORE);
+                    }
+                }
             }
         }
     }

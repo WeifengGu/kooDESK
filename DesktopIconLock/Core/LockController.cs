@@ -865,19 +865,58 @@ if (source == null || source.Icons == null || currentIcons == null)
 return subset;
 }
 
+Dictionary<string, List<IconPositionItem>> currentGroups =
+    new Dictionary<string, List<IconPositionItem>>(StringComparer.OrdinalIgnoreCase);
+foreach (KeyValuePair<string, IconPositionItem> pair in currentIcons)
+{
+    if (pair.Value == null) continue;
+    string name = IconAccessor.ExtractBaseDisplayName(pair.Key, pair.Value.DisplayName);
+    List<IconPositionItem> list;
+    if (!currentGroups.TryGetValue(name, out list))
+    {
+        list = new List<IconPositionItem>();
+        currentGroups[name] = list;
+    }
+    list.Add(pair.Value);
+}
+
+Dictionary<string, List<IconPositionItem>> sourceGroups =
+    new Dictionary<string, List<IconPositionItem>>(StringComparer.OrdinalIgnoreCase);
 foreach (KeyValuePair<string, IconPositionItem> pair in source.Icons)
 {
-if (!currentIcons.ContainsKey(pair.Key)) continue;
+    if (pair.Value == null) continue;
+    string name = IconAccessor.ExtractBaseDisplayName(pair.Key, pair.Value.DisplayName);
+    List<IconPositionItem> list;
+    if (!sourceGroups.TryGetValue(name, out list))
+    {
+        list = new List<IconPositionItem>();
+        sourceGroups[name] = list;
+    }
+    list.Add(pair.Value);
+}
 
-IconPositionItem item = pair.Value;
-if (item == null) continue;
-subset.Icons[pair.Key] = new IconPositionItem
+foreach (KeyValuePair<string, List<IconPositionItem>> sg in sourceGroups)
 {
-Key = item.Key,
-DisplayName = item.DisplayName,
-X = item.X,
-Y = item.Y
-};
+    string name = sg.Key;
+    List<IconPositionItem> sList = sg.Value;
+    List<IconPositionItem> cList;
+    if (!currentGroups.TryGetValue(name, out cList) || cList.Count == 0)
+    {
+        continue;
+    }
+
+    int countToTake = Math.Min(sList.Count, cList.Count);
+    for (int i = 0; i < countToTake; i++)
+    {
+        IconPositionItem item = sList[i];
+        subset.Icons[item.Key] = new IconPositionItem
+        {
+            Key = item.Key,
+            DisplayName = item.DisplayName,
+            X = item.X,
+            Y = item.Y
+        };
+    }
 }
 
 return subset;

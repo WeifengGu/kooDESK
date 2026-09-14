@@ -372,7 +372,7 @@ namespace DesktopIconLock.Core
                 string id = fileName.Substring(
                     0,
                     fileName.Length - ".history.json".Length);
-                string[] parts = id.Split('_');
+                string[] parts = id.Split(new char[] { '_' });
                 long sequence;
                 if (parts.Length < 4 || !long.TryParse(parts[0], out sequence))
                 {

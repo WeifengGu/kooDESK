@@ -1,199 +1,86 @@
 using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
-using System.Runtime.InteropServices;
 using System.Windows.Forms;
 using DesktopIconLock.Core;
 
 namespace DesktopIconLock.Tray
 {
     /// <summary>
-    /// 历史布局预览与操作窗口
-    /// 1. 悬停状态（Hover Mode）：
-    ///    - 纯预览卡片，采用 WS_EX_NOACTIVATE 与 SW_SHOWNOACTIVATE，绝对不抢输入焦点。
-    ///    - 用户鼠标在托盘菜单各历史项之间自由滑动时，托盘菜单保持 100% 展开不关闭，预览图平滑跟随切换。
-    /// 2. 点击状态（Pinned Action Mode）：
-    ///    - 用户左键点击菜单项后，托盘菜单关闭，窗口立即转换为带有【删除】【取消】【设为基准】【应用】按钮的操作控制面板。
+    /// 历史布局浏览汇总与管理窗口
+    /// 点击托盘菜单中的【历史布局】后直接以弹窗形式展示所有历史布局卡片视图（网格矩阵），
+    /// 彻底避免鼠标在多级子菜单移动时菜单因失焦意外关闭的问题。
     /// </summary>
     public class HistoryPreviewForm : Form
     {
-        private const int WS_EX_NOACTIVATE = 0x08000000;
-        private const int WS_EX_TOPMOST = 0x00000008;
-        private const int WS_EX_TOOLWINDOW = 0x00000080;
-        private const int SW_SHOWNOACTIVATE = 4;
-        private const int SW_HIDE = 0;
-
-        [DllImport("user32.dll")]
-        private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
-
-        private readonly PictureBox _pictureBox;
-        private readonly Label _informationLabel;
-        private readonly FlowLayoutPanel _buttonPanel;
-        private readonly Button _deleteButton;
-        private readonly Button _cancelButton;
-        private readonly Button _baseButton;
-        private readonly Button _applyButton;
-        private HistoryLayoutRecord _currentRecord;
-        private bool _isPinned;
+        private readonly FlowLayoutPanel _cardContainer;
+        private readonly Label _headerTitle;
+        private readonly Label _headerSubtitle;
+        private readonly Panel _headerPanel;
+        private readonly List<HistoryLayoutRecord> _loadedRecords = new List<HistoryLayoutRecord>();
 
         public event Action<HistoryLayoutRecord> DeleteRequested;
         public event Action<HistoryLayoutRecord> BaseRequested;
         public event Action<HistoryLayoutRecord> ApplyRequested;
 
-        public HistoryLayoutRecord CurrentRecord { get { return _currentRecord; } }
-        public bool IsPinned { get { return _isPinned; } }
-
         public HistoryPreviewForm()
         {
-            FormBorderStyle = FormBorderStyle.FixedDialog;
-            ShowInTaskbar = false;
-            TopMost = true;
-            StartPosition = FormStartPosition.Manual;
-            BackColor = Color.FromArgb(28, 28, 28);
+            Text = "历史布局浏览汇总";
+            FormBorderStyle = FormBorderStyle.Sizable;
+            StartPosition = FormStartPosition.CenterScreen;
+            BackColor = Color.FromArgb(24, 24, 28);
             ForeColor = Color.White;
-            ClientSize = new Size(680, 480);
-            MaximizeBox = false;
-            MinimizeBox = false;
-            Text = "历史布局预览";
+            MinimumSize = new Size(680, 500);
+            ClientSize = new Size(1020, 680);
+            ShowInTaskbar = true;
+            MaximizeBox = true;
+            MinimizeBox = true;
+            Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath);
 
-            _pictureBox = new PictureBox();
-            _pictureBox.Location = new Point(10, 10);
-            _pictureBox.Size = new Size(660, 360);
-            _pictureBox.SizeMode = PictureBoxSizeMode.Zoom;
-            _pictureBox.BackColor = Color.FromArgb(16, 16, 16);
-            _pictureBox.BorderStyle = BorderStyle.FixedSingle;
-            Controls.Add(_pictureBox);
+            _headerPanel = new Panel();
+            _headerPanel.Dock = DockStyle.Top;
+            _headerPanel.Height = 65;
+            _headerPanel.BackColor = Color.FromArgb(32, 32, 38);
+            _headerPanel.Padding = new Padding(24, 12, 24, 10);
+            Controls.Add(_headerPanel);
 
-            _informationLabel = new Label();
-            _informationLabel.Location = new Point(12, 380);
-            _informationLabel.Size = new Size(656, 48);
-            _informationLabel.AutoEllipsis = true;
-            _informationLabel.ForeColor = Color.FromArgb(230, 230, 230);
-            _informationLabel.Font = new Font("Microsoft YaHei UI", 9.5F, FontStyle.Regular);
-            Controls.Add(_informationLabel);
+            _headerTitle = new Label();
+            _headerTitle.Text = "历史布局浏览汇总";
+            _headerTitle.Font = new Font("Microsoft YaHei UI", 12.5F, FontStyle.Bold);
+            _headerTitle.ForeColor = Color.White;
+            _headerTitle.AutoSize = true;
+            _headerTitle.Location = new Point(20, 10);
+            _headerPanel.Controls.Add(_headerTitle);
 
-            _buttonPanel = new FlowLayoutPanel();
-            _buttonPanel.Location = new Point(10, 436);
-            _buttonPanel.Size = new Size(660, 44);
-            _buttonPanel.FlowDirection = FlowDirection.RightToLeft;
-            _buttonPanel.WrapContents = false;
-            Controls.Add(_buttonPanel);
+            _headerSubtitle = new Label();
+            _headerSubtitle.Text = "点击任意布局的【应用】即可立即恢复图标位置，或将其【设为基准】与【删除】。";
+            _headerSubtitle.Font = new Font("Microsoft YaHei UI", 9F, FontStyle.Regular);
+            _headerSubtitle.ForeColor = Color.FromArgb(180, 180, 190);
+            _headerSubtitle.AutoSize = true;
+            _headerSubtitle.Location = new Point(22, 36);
+            _headerPanel.Controls.Add(_headerSubtitle);
 
-            _applyButton = CreateButton("应用", Color.FromArgb(0, 122, 204), Color.White);
-            _baseButton = CreateButton("设为基准", Color.FromArgb(45, 137, 239), Color.White);
-            _cancelButton = CreateButton("关闭/取消", Color.FromArgb(70, 70, 70), Color.White);
-            _deleteButton = CreateButton("删除此记录", Color.FromArgb(180, 40, 40), Color.White);
-
-            _buttonPanel.Controls.Add(_applyButton);
-            _buttonPanel.Controls.Add(_baseButton);
-            _buttonPanel.Controls.Add(_cancelButton);
-            _buttonPanel.Controls.Add(_deleteButton);
-
-            _applyButton.Click += delegate
-            {
-                if (_currentRecord != null && ApplyRequested != null)
-                {
-                    ApplyRequested(_currentRecord);
-                }
-            };
-            _baseButton.Click += delegate
-            {
-                if (_currentRecord != null && BaseRequested != null)
-                {
-                    BaseRequested(_currentRecord);
-                }
-            };
-            _deleteButton.Click += delegate
-            {
-                if (_currentRecord != null && DeleteRequested != null)
-                {
-                    DeleteRequested(_currentRecord);
-                }
-            };
-            _cancelButton.Click += delegate { HidePreview(true); };
-
-            SetActionButtonsVisible(false);
+            _cardContainer = new FlowLayoutPanel();
+            _cardContainer.Dock = DockStyle.Fill;
+            _cardContainer.AutoScroll = true;
+            _cardContainer.Padding = new Padding(20, 16, 20, 20);
+            _cardContainer.WrapContents = true;
+            _cardContainer.FlowDirection = FlowDirection.LeftToRight;
+            _cardContainer.BackColor = Color.FromArgb(20, 20, 24);
+            Controls.Add(_cardContainer);
+            _cardContainer.BringToFront();
         }
 
-        protected override bool ShowWithoutActivation
+        public void ShowOverview(List<HistoryLayoutRecord> records)
         {
-            get { return true; }
-        }
-
-        protected override CreateParams CreateParams
-        {
-            get
+            _loadedRecords.Clear();
+            if (records != null)
             {
-                CreateParams parameters = base.CreateParams;
-                parameters.ExStyle |= WS_EX_NOACTIVATE | WS_EX_TOPMOST | WS_EX_TOOLWINDOW;
-                return parameters;
+                _loadedRecords.AddRange(records);
             }
-        }
 
-        /// <summary>
-        /// 悬停预览：使用无激活显示，菜单完全不失焦，保持展开
-        /// </summary>
-        public void ShowHoverPreview(HistoryLayoutRecord record, Point menuScreenLocation, Size menuSize)
-        {
-            if (_isPinned || record == null) return;
-
-            _currentRecord = record;
-            SetActionButtonsVisible(false);
-            LoadScreenshot(record.ScreenshotPath);
-
-            string baseTag = record.IsBase ? "【★ 当前自适应基准】" : "";
-            _informationLabel.Text = string.Format(
-                "{0} {1}\r\n记录时间：{2}   物理分辨率：{3}   缩放比例：{4}%   桌面图标数：{5}",
-                record.MenuText,
-                baseTag,
-                record.CreatedAt.ToString("yyyy-MM-dd HH:mm:ss"),
-                record.Profile != null ? record.Profile.Resolution : "未知",
-                record.ScalePercent,
-                record.Profile != null && record.Profile.Icons != null ? record.Profile.Icons.Count : 0);
-
-            Text = "历史布局预览（点击菜单项弹出操作面板）";
-            UpdateResponsiveLayout(menuScreenLocation);
-            PositionCenterOfScreen(menuScreenLocation);
-
-            if (!Visible)
-            {
-                ShowWindow(Handle, SW_SHOWNOACTIVATE);
-                Visible = true;
-            }
-            else
-            {
-                Invalidate();
-            }
-        }
-
-        /// <summary>
-        /// 点击固定模式：显示操作按钮，成为操作面板
-        /// </summary>
-        public void PinActionPanel(HistoryLayoutRecord record, Point anchorPoint)
-        {
-            if (record == null) return;
-
-            _currentRecord = record;
-            _isPinned = true;
-            SetActionButtonsVisible(true);
-            LoadScreenshot(record.ScreenshotPath);
-
-            string baseTag = record.IsBase ? "【★ 当前自适应基准】" : "";
-            _informationLabel.Text = string.Format(
-                "{0} {1}\r\n记录时间：{2}   物理分辨率：{3}   缩放比例：{4}%   桌面图标数：{5}",
-                record.MenuText,
-                baseTag,
-                record.CreatedAt.ToString("yyyy-MM-dd HH:mm:ss"),
-                record.Profile != null ? record.Profile.Resolution : "未知",
-                record.ScalePercent,
-                record.Profile != null && record.Profile.Icons != null ? record.Profile.Icons.Count : 0);
-
-            _baseButton.Enabled = !record.IsBase;
-            _baseButton.Text = record.IsBase ? "已是基准" : "设为基准";
-            Text = "历史布局管理 - 操作控制面板";
-
-            UpdateResponsiveLayout(anchorPoint);
-            PositionCenterOfScreen(anchorPoint);
+            RenderCards();
 
             if (!Visible)
             {
@@ -203,131 +90,182 @@ namespace DesktopIconLock.Tray
             Activate();
         }
 
-        public void HidePreview(bool force)
+        public void RefreshList(List<HistoryLayoutRecord> records)
         {
-            if (!force && _isPinned) return;
-            _isPinned = false;
-            SetActionButtonsVisible(false);
-            ShowWindow(Handle, SW_HIDE);
-            Visible = false;
-        }
-
-        private void SetActionButtonsVisible(bool visible)
-        {
-            _buttonPanel.Visible = visible;
-            _buttonPanel.Enabled = visible;
-        }
-
-        /// <summary>
-        /// 响应式尺寸重算：
-        /// 1. 屏幕分辨率在 1920*1080 以下（不含）时：窗口宽度为屏幕工作区宽度的 70%；
-        /// 2. 1920*1080 含及以上时：窗口宽度为屏幕工作区宽度的 50%；
-        /// 3. 图片展示区按 16:9 比例自适应缩放，按钮面板和说明标签高度跟随动态重排。
-        /// </summary>
-        private void UpdateResponsiveLayout(Point referencePoint)
-        {
-            Screen screen = referencePoint.X != 0 || referencePoint.Y != 0
-                ? Screen.FromPoint(referencePoint)
-                : Screen.PrimaryScreen;
-            if (screen == null) screen = Screen.PrimaryScreen;
-
-            Rectangle workArea = screen.WorkingArea;
-            bool isUnder1080p = screen.Bounds.Width < 1920 || screen.Bounds.Height < 1080;
-            double ratio = isUnder1080p ? 0.70 : 0.50;
-
-            int targetWidth = (int)Math.Round(workArea.Width * ratio);
-            targetWidth = Math.Max(560, Math.Min(targetWidth, workArea.Width - 40));
-
-            int margin = 12;
-            int picWidth = targetWidth - margin * 2;
-            int picHeight = (int)Math.Round(picWidth * 9.0 / 16.0);
-
-            // 垂直方向防溢出约束
-            int maxPicHeight = Math.Max(220, workArea.Height - 240);
-            if (picHeight > maxPicHeight)
+            _loadedRecords.Clear();
+            if (records != null)
             {
-                picHeight = maxPicHeight;
-                picWidth = (int)Math.Round(picHeight * 16.0 / 9.0);
-                targetWidth = picWidth + margin * 2;
+                _loadedRecords.AddRange(records);
+            }
+            RenderCards();
+        }
+
+        private void RenderCards()
+        {
+            _cardContainer.SuspendLayout();
+
+            for (int i = _cardContainer.Controls.Count - 1; i >= 0; i--)
+            {
+                Control ctrl = _cardContainer.Controls[i];
+                _cardContainer.Controls.RemoveAt(i);
+                ctrl.Dispose();
             }
 
-            int infoHeight = 48;
-            int buttonHeight = 44;
-            int targetHeight = margin + picHeight + 10 + infoHeight + (_isPinned ? (8 + buttonHeight) : 0) + margin;
+            if (_loadedRecords.Count == 0)
+            {
+                Label emptyLabel = new Label();
+                emptyLabel.Text = "暂无历史布局记录\n\n您可以在托盘右键菜单中点击【保存当前布局】创建记录。";
+                emptyLabel.Font = new Font("Microsoft YaHei UI", 12F, FontStyle.Regular);
+                emptyLabel.ForeColor = Color.FromArgb(150, 150, 160);
+                emptyLabel.AutoSize = true;
+                emptyLabel.Padding = new Padding(30);
+                _cardContainer.Controls.Add(emptyLabel);
+                _cardContainer.ResumeLayout();
+                return;
+            }
 
-            ClientSize = new Size(targetWidth, targetHeight);
+            int cardWidth = 300;
+            int cardHeight = 290;
 
-            _pictureBox.Location = new Point(margin, margin);
-            _pictureBox.Size = new Size(picWidth, picHeight);
+            for (int i = 0; i < _loadedRecords.Count; i++)
+            {
+                HistoryLayoutRecord record = _loadedRecords[i];
+                Panel card = CreateRecordCard(record, i + 1, cardWidth, cardHeight);
+                _cardContainer.Controls.Add(card);
+            }
 
-            int currentY = margin + picHeight + 10;
-            _informationLabel.Location = new Point(margin + 2, currentY);
-            _informationLabel.Size = new Size(picWidth - 4, infoHeight);
-
-            currentY += infoHeight + 8;
-            _buttonPanel.Location = new Point(margin, currentY);
-            _buttonPanel.Size = new Size(picWidth, buttonHeight);
+            _cardContainer.ResumeLayout();
         }
 
-        private Button CreateButton(string text, Color backColor, Color foreColor)
+        private Panel CreateRecordCard(HistoryLayoutRecord record, int index, int width, int height)
+        {
+            Panel card = new Panel();
+            card.Size = new Size(width, height);
+            card.Margin = new Padding(12, 12, 12, 12);
+            card.BackColor = Color.FromArgb(32, 32, 38);
+            card.BorderStyle = BorderStyle.FixedSingle;
+
+            Panel topBar = new Panel();
+            topBar.Location = new Point(0, 0);
+            topBar.Size = new Size(width, 32);
+            topBar.BackColor = record.IsBase ? Color.FromArgb(30, 80, 50) : Color.FromArgb(42, 42, 50);
+            card.Controls.Add(topBar);
+
+            Label titleLabel = new Label();
+            string baseBadge = record.IsBase ? " [★ 当前基准]" : "";
+            titleLabel.Text = string.Format("布局 {0}{1}", index, baseBadge);
+            titleLabel.Font = new Font("Microsoft YaHei UI", 9.5F, FontStyle.Bold);
+            titleLabel.ForeColor = record.IsBase ? Color.FromArgb(120, 255, 170) : Color.FromArgb(0, 180, 255);
+            titleLabel.Location = new Point(8, 6);
+            titleLabel.Size = new Size(width - 16, 20);
+            titleLabel.AutoEllipsis = true;
+            topBar.Controls.Add(titleLabel);
+
+            PictureBox thumbBox = new PictureBox();
+            thumbBox.Location = new Point(10, 38);
+            thumbBox.Size = new Size(width - 20, 140);
+            thumbBox.SizeMode = PictureBoxSizeMode.Zoom;
+            thumbBox.BackColor = Color.FromArgb(14, 14, 18);
+            thumbBox.BorderStyle = BorderStyle.FixedSingle;
+            thumbBox.Cursor = Cursors.Hand;
+
+            if (File.Exists(record.ScreenshotPath))
+            {
+                try
+                {
+                    using (FileStream fs = new FileStream(record.ScreenshotPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+                    using (Image src = Image.FromStream(fs))
+                    {
+                        thumbBox.Image = new Bitmap(src);
+                    }
+                }
+                catch { }
+            }
+            card.Controls.Add(thumbBox);
+
+            Label infoLabel = new Label();
+            infoLabel.Location = new Point(10, 182);
+            infoLabel.Size = new Size(width - 20, 52);
+            infoLabel.Font = new Font("Microsoft YaHei UI", 8.5F, FontStyle.Regular);
+            infoLabel.ForeColor = Color.FromArgb(200, 200, 210);
+            infoLabel.Text = string.Format(
+                "分辨率: {0} @ {1}%\n图标数: {2} 项\n时间: {3}",
+                record.Profile != null ? record.Profile.Resolution : "未知",
+                record.ScalePercent,
+                record.Profile != null && record.Profile.Icons != null ? record.Profile.Icons.Count : 0,
+                record.CreatedAt.ToString("yyyy-MM-dd HH:mm:ss"));
+            card.Controls.Add(infoLabel);
+
+            Panel actionsPanel = new Panel();
+            actionsPanel.Location = new Point(8, 240);
+            actionsPanel.Size = new Size(width - 16, 40);
+            card.Controls.Add(actionsPanel);
+
+            Button applyBtn = CreateActionButton("应用", Color.FromArgb(0, 122, 204), Color.White, 65, 30);
+            applyBtn.Location = new Point(0, 4);
+            applyBtn.Click += delegate
+            {
+                if (ApplyRequested != null)
+                {
+                    ApplyRequested(record);
+                }
+            };
+            actionsPanel.Controls.Add(applyBtn);
+
+            Button baseBtn = CreateActionButton(record.IsBase ? "已是基准" : "设为基准", Color.FromArgb(45, 137, 239), Color.White, 80, 30);
+            baseBtn.Location = new Point(70, 4);
+            baseBtn.Enabled = !record.IsBase;
+            if (record.IsBase)
+            {
+                baseBtn.BackColor = Color.FromArgb(60, 70, 80);
+                baseBtn.ForeColor = Color.FromArgb(160, 160, 170);
+            }
+            baseBtn.Click += delegate
+            {
+                if (BaseRequested != null)
+                {
+                    BaseRequested(record);
+                }
+            };
+            actionsPanel.Controls.Add(baseBtn);
+
+            Button delBtn = CreateActionButton("删除", Color.FromArgb(180, 40, 40), Color.White, 60, 30);
+            delBtn.Location = new Point(actionsPanel.Width - 60, 4);
+            delBtn.Click += delegate
+            {
+                if (DeleteRequested != null)
+                {
+                    DeleteRequested(record);
+                }
+            };
+            actionsPanel.Controls.Add(delBtn);
+
+            return card;
+        }
+
+        private Button CreateActionButton(string text, Color backColor, Color foreColor, int width, int height)
         {
             Button btn = new Button();
             btn.Text = text;
-            btn.Size = new Size(106, 36);
-            btn.Margin = new Padding(6, 2, 0, 2);
+            btn.Size = new Size(width, height);
             btn.BackColor = backColor;
             btn.ForeColor = foreColor;
             btn.FlatStyle = FlatStyle.Flat;
             btn.FlatAppearance.BorderSize = 0;
-            btn.Font = new Font("Microsoft YaHei UI", 9.5F, FontStyle.Bold);
+            btn.Font = new Font("Microsoft YaHei UI", 9F, FontStyle.Regular);
             btn.Cursor = Cursors.Hand;
             return btn;
         }
 
-        private void LoadScreenshot(string path)
+        protected override void OnFormClosing(FormClosingEventArgs e)
         {
-            Image oldImage = _pictureBox.Image;
-            _pictureBox.Image = null;
-            if (oldImage != null) oldImage.Dispose();
-
-            if (!File.Exists(path)) return;
-
-            try
+            if (e.CloseReason == CloseReason.UserClosing)
             {
-                using (FileStream fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
-                using (Image src = Image.FromStream(fs))
-                {
-                    _pictureBox.Image = new Bitmap(src);
-                }
+                e.Cancel = true;
+                Hide();
+                return;
             }
-            catch { }
-        }
-
-        private void PositionCenterOfScreen(Point referencePoint)
-        {
-            Screen screen = referencePoint.X != 0 || referencePoint.Y != 0
-                ? Screen.FromPoint(referencePoint)
-                : Screen.PrimaryScreen;
-            if (screen == null) screen = Screen.PrimaryScreen;
-
-            Rectangle workArea = screen.WorkingArea;
-            int x = workArea.Left + Math.Max(0, (workArea.Width - Width) / 2);
-            int y = workArea.Top + Math.Max(0, (workArea.Height - Height) / 2);
-
-            Location = new Point(x, y);
-        }
-
-        protected override void Dispose(bool disposing)
-        {
-            if (disposing)
-            {
-                if (_pictureBox.Image != null)
-                {
-                    _pictureBox.Image.Dispose();
-                    _pictureBox.Image = null;
-                }
-            }
-            base.Dispose(disposing);
+            base.OnFormClosing(e);
         }
     }
 }

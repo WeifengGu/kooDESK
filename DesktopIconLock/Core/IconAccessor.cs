@@ -103,6 +103,116 @@ namespace DesktopIconLock.Core
             public int iGroup;
         }
 
+        public static string ExtractBaseDisplayName(string key, string displayName)
+        {
+            if (!string.IsNullOrEmpty(displayName))
+            {
+                return displayName;
+            }
+            if (string.IsNullOrEmpty(key))
+            {
+                return string.Empty;
+            }
+            int hashIdx = key.LastIndexOf('#');
+            if (hashIdx > 0 && hashIdx < key.Length - 1)
+            {
+                int occ;
+                if (int.TryParse(key.Substring(hashIdx + 1), out occ))
+                {
+                    return key.Substring(0, hashIdx);
+                }
+            }
+            return key;
+        }
+
+        public static Dictionary<int, IconPositionItem> MatchDesktopItemsToTargets(
+            List<KeyValuePair<int, IconPositionItem>> desktopItems,
+            Dictionary<string, IconPositionItem> targetPositions)
+        {
+            Dictionary<int, IconPositionItem> result = new Dictionary<int, IconPositionItem>();
+            if (desktopItems == null || desktopItems.Count == 0 || targetPositions == null || targetPositions.Count == 0)
+            {
+                return result;
+            }
+
+            Dictionary<string, List<IconPositionItem>> targetGroups =
+                new Dictionary<string, List<IconPositionItem>>(StringComparer.OrdinalIgnoreCase);
+            foreach (KeyValuePair<string, IconPositionItem> pair in targetPositions)
+            {
+                if (pair.Value == null) continue;
+                string baseName = ExtractBaseDisplayName(pair.Key, pair.Value.DisplayName);
+                List<IconPositionItem> list;
+                if (!targetGroups.TryGetValue(baseName, out list))
+                {
+                    list = new List<IconPositionItem>();
+                    targetGroups[baseName] = list;
+                }
+                list.Add(pair.Value);
+            }
+
+            Dictionary<string, List<KeyValuePair<int, IconPositionItem>>> desktopGroups =
+                new Dictionary<string, List<KeyValuePair<int, IconPositionItem>>>(StringComparer.OrdinalIgnoreCase);
+            for (int i = 0; i < desktopItems.Count; i++)
+            {
+                KeyValuePair<int, IconPositionItem> kvp = desktopItems[i];
+                string name = kvp.Value != null ? ExtractBaseDisplayName(kvp.Value.Key, kvp.Value.DisplayName) : string.Empty;
+                if (string.IsNullOrEmpty(name)) continue;
+
+                List<KeyValuePair<int, IconPositionItem>> list;
+                if (!desktopGroups.TryGetValue(name, out list))
+                {
+                    list = new List<KeyValuePair<int, IconPositionItem>>();
+                    desktopGroups[name] = list;
+                }
+                list.Add(kvp);
+            }
+
+            foreach (KeyValuePair<string, List<KeyValuePair<int, IconPositionItem>>> groupPair in desktopGroups)
+            {
+                string groupName = groupPair.Key;
+                List<KeyValuePair<int, IconPositionItem>> dList = groupPair.Value;
+                List<IconPositionItem> tList;
+                if (!targetGroups.TryGetValue(groupName, out tList) || tList.Count == 0)
+                {
+                    continue;
+                }
+
+                if (dList.Count == 1 && tList.Count == 1)
+                {
+                    result[dList[0].Key] = tList[0];
+                }
+                else
+                {
+                    List<IconPositionItem> pool = new List<IconPositionItem>(tList);
+                    for (int d = 0; d < dList.Count; d++)
+                    {
+                        if (pool.Count == 0) break;
+                        int curX = dList[d].Value != null ? dList[d].Value.X : 0;
+                        int curY = dList[d].Value != null ? dList[d].Value.Y : 0;
+
+                        int bestIdx = 0;
+                        long bestDistSq = long.MaxValue;
+                        for (int t = 0; t < pool.Count; t++)
+                        {
+                            long dx = curX - pool[t].X;
+                            long dy = curY - pool[t].Y;
+                            long distSq = dx * dx + dy * dy;
+                            if (distSq < bestDistSq)
+                            {
+                                bestDistSq = distSq;
+                                bestIdx = t;
+                            }
+                        }
+
+                        result[dList[d].Key] = pool[bestIdx];
+                        pool.RemoveAt(bestIdx);
+                    }
+                }
+            }
+
+            return result;
+        }
+
         public static Dictionary<string, IconPositionItem> ReadCurrentIconPositions()
         {
             string traceId = AuditLogger.CurrentTraceId;
@@ -132,6 +242,7 @@ namespace DesktopIconLock.Core
                 {
                     int count = User32.SendMessage(hListView, User32.LVM_GETITEMCOUNT, IntPtr.Zero, IntPtr.Zero).ToInt32();
                     AuditLogger.LogCalculationStep("统计桌面图标数量", 1, "LVM_GETITEMCOUNT", "0", string.Format("获取到桌面图标总项数: {0}", count), count.ToString(), "循环提取坐标与文本", traceId);
+                    List<IconPositionItem> rawItems = new List<IconPositionItem>();
 
                     IntPtr memPoint = VirtualAllocEx(hProcess, IntPtr.Zero, 8, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
                     IntPtr memItem = VirtualAllocEx(hProcess, IntPtr.Zero, 1024, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
@@ -173,15 +284,35 @@ namespace DesktopIconLock.Core
 
                             if (!string.IsNullOrEmpty(name))
                             {
-                                IconPositionItem item = new IconPositionItem();
-                                item.Key = name;
-                                item.DisplayName = name;
-                                item.X = x;
-                                item.Y = y;
-                                result[name] = item;
-
-                                AuditLogger.Debug("图标坐标捕获", string.Format("[{0}/{1}] 捕获图标: {2}", i + 1, count, item), traceId);
+                                rawItems.Add(new IconPositionItem
+                                {
+                                    DisplayName = name,
+                                    X = x,
+                                    Y = y
+                                });
                             }
+                        }
+
+                        Dictionary<string, int> nameCounts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+                        for (int i = 0; i < rawItems.Count; i++)
+                        {
+                            string name = rawItems[i].DisplayName;
+                            int cur;
+                            nameCounts.TryGetValue(name, out cur);
+                            nameCounts[name] = cur + 1;
+                        }
+
+                        Dictionary<string, int> nameOccurrences = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+                        for (int i = 0; i < rawItems.Count; i++)
+                        {
+                            IconPositionItem item = rawItems[i];
+                            int curOcc;
+                            nameOccurrences.TryGetValue(item.DisplayName, out curOcc);
+                            curOcc++;
+                            nameOccurrences[item.DisplayName] = curOcc;
+                            item.Key = nameCounts[item.DisplayName] > 1 ? string.Format("{0}#{1}", item.DisplayName, curOcc) : item.DisplayName;
+                            result[item.Key] = item;
+                            AuditLogger.Debug("图标坐标捕获", string.Format("[{0}/{1}] 捕获图标: {2}", i + 1, count, item), traceId);
                         }
 
                         AuditLogger.LogResponseReturn("读取当前桌面图标坐标", 200, string.Format("成功捕获 {0} 个桌面图标坐标", result.Count), 0, "成功", "所有图标坐标已捕获完毕", traceId);
@@ -218,24 +349,94 @@ namespace DesktopIconLock.Core
                 return result;
             }
 
+            if (currentPositions == null || currentPositions.Count == 0)
+            {
+                result.MissingTargetIconCount = result.TargetIconCount;
+                return result;
+            }
+
+            Dictionary<string, List<IconPositionItem>> targetGroups =
+                new Dictionary<string, List<IconPositionItem>>(StringComparer.OrdinalIgnoreCase);
             foreach (KeyValuePair<string, IconPositionItem> pair in targetPositions)
             {
-                IconPositionItem current;
-                if (currentPositions == null ||
-                    !currentPositions.TryGetValue(pair.Key, out current) ||
-                    current == null)
+                if (pair.Value == null) continue;
+                string baseName = ExtractBaseDisplayName(pair.Key, pair.Value.DisplayName);
+                List<IconPositionItem> list;
+                if (!targetGroups.TryGetValue(baseName, out list))
                 {
-                    result.MissingTargetIconCount++;
+                    list = new List<IconPositionItem>();
+                    targetGroups[baseName] = list;
+                }
+                list.Add(pair.Value);
+            }
+
+            Dictionary<string, List<IconPositionItem>> currentGroups =
+                new Dictionary<string, List<IconPositionItem>>(StringComparer.OrdinalIgnoreCase);
+            foreach (KeyValuePair<string, IconPositionItem> pair in currentPositions)
+            {
+                if (pair.Value == null) continue;
+                string baseName = ExtractBaseDisplayName(pair.Key, pair.Value.DisplayName);
+                List<IconPositionItem> list;
+                if (!currentGroups.TryGetValue(baseName, out list))
+                {
+                    list = new List<IconPositionItem>();
+                    currentGroups[baseName] = list;
+                }
+                list.Add(pair.Value);
+            }
+
+            foreach (KeyValuePair<string, List<IconPositionItem>> tg in targetGroups)
+            {
+                string name = tg.Key;
+                List<IconPositionItem> tList = tg.Value;
+                List<IconPositionItem> cList;
+                if (!currentGroups.TryGetValue(name, out cList) || cList.Count == 0)
+                {
+                    result.MissingTargetIconCount += tList.Count;
                     continue;
                 }
 
-                result.MatchedIconCount++;
-                IconPositionItem target = pair.Value;
-                if (target == null ||
-                    current.X != target.X ||
-                    current.Y != target.Y)
+                if (tList.Count == 1 && cList.Count == 1)
                 {
-                    result.MismatchCount++;
+                    result.MatchedIconCount++;
+                    if (tList[0].X != cList[0].X || tList[0].Y != cList[0].Y)
+                    {
+                        result.MismatchCount++;
+                    }
+                }
+                else
+                {
+                    List<IconPositionItem> cPool = new List<IconPositionItem>(cList);
+                    for (int i = 0; i < tList.Count; i++)
+                    {
+                        IconPositionItem target = tList[i];
+                        if (cPool.Count == 0)
+                        {
+                            result.MissingTargetIconCount++;
+                            continue;
+                        }
+
+                        int bestIdx = 0;
+                        long bestDistSq = long.MaxValue;
+                        for (int c = 0; c < cPool.Count; c++)
+                        {
+                            long dx = target.X - cPool[c].X;
+                            long dy = target.Y - cPool[c].Y;
+                            long distSq = dx * dx + dy * dy;
+                            if (distSq < bestDistSq)
+                            {
+                                bestDistSq = distSq;
+                                bestIdx = c;
+                            }
+                        }
+
+                        result.MatchedIconCount++;
+                        if (target.X != cPool[bestIdx].X || target.Y != cPool[bestIdx].Y)
+                        {
+                            result.MismatchCount++;
+                        }
+                        cPool.RemoveAt(bestIdx);
+                    }
                 }
             }
 
@@ -293,7 +494,7 @@ namespace DesktopIconLock.Core
 
                     try
                     {
-                        Dictionary<int, string> indexToName = new Dictionary<int, string>();
+                        List<KeyValuePair<int, IconPositionItem>> desktopItems = new List<KeyValuePair<int, IconPositionItem>>();
                         for (int index = 0; index < count; index++)
                         {
                             string name = ReadItemName(
@@ -304,27 +505,36 @@ namespace DesktopIconLock.Core
                                 memText);
                             if (!string.IsNullOrEmpty(name))
                             {
-                                indexToName[index] = name;
+                                int curX;
+                                int curY;
+                                ReadItemPosition(
+                                    hListView,
+                                    hProcess,
+                                    index,
+                                    memPoint,
+                                    out curX,
+                                    out curY);
+                                desktopItems.Add(new KeyValuePair<int, IconPositionItem>(
+                                    index,
+                                    new IconPositionItem { Key = name, DisplayName = name, X = curX, Y = curY }));
                             }
                         }
 
-                        HashSet<string> matched = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                        Dictionary<int, IconPositionItem> matchedMap = MatchDesktopItemsToTargets(desktopItems, targetPositions);
                         int initialMismatch = 0;
-                        foreach (KeyValuePair<int, string> indexPair in indexToName)
+                        foreach (KeyValuePair<int, IconPositionItem> matchPair in matchedMap)
                         {
-                            IconPositionItem target;
-                            if (!targetPositions.TryGetValue(indexPair.Value, out target)) continue;
-
+                            int index = matchPair.Key;
+                            IconPositionItem target = matchPair.Value;
                             int currentX;
                             int currentY;
                             ReadItemPosition(
                                 hListView,
                                 hProcess,
-                                indexPair.Key,
+                                index,
                                 memPoint,
                                 out currentX,
                                 out currentY);
-                            matched.Add(indexPair.Value);
                             if (currentX != target.X || currentY != target.Y)
                             {
                                 initialMismatch++;
@@ -337,7 +547,7 @@ namespace DesktopIconLock.Core
                             AuditLogger.LogResponseReturn(
                                 "应用目标图标坐标",
                                 200,
-                                string.Format("目标已与当前桌面一致；匹配{0}个图标，未修改ListView样式或坐标", matched.Count),
+                                string.Format("目标已与当前桌面一致；匹配{0}个图标，未修改ListView样式或坐标", matchedMap.Count),
                                 0,
                                 "跳过",
                                 "避免无差异时触发Explorer重绘或位置事件",
@@ -347,7 +557,7 @@ namespace DesktopIconLock.Core
 
                         AuditLogger.LogRuleDecision(
                             "批量定位前置差异检查",
-                            string.Format("匹配图标={0}, 坐标偏差={1}", matched.Count, initialMismatch),
+                            string.Format("匹配图标={0}, 坐标偏差={1}", matchedMap.Count, initialMismatch),
                             "执行实际坐标写入",
                             "仅在确认存在位置差异后才临时关闭网格对齐",
                             traceId);
@@ -368,24 +578,23 @@ namespace DesktopIconLock.Core
                         for (int pass = 1; pass <= 4 && remainingMismatch > 0; pass++)
                         {
                             remainingMismatch = 0;
-                            foreach (KeyValuePair<int, string> indexPair in indexToName)
+                            foreach (KeyValuePair<int, IconPositionItem> matchPair in matchedMap)
                             {
-                                IconPositionItem target;
-                                if (!targetPositions.TryGetValue(indexPair.Value, out target)) continue;
-
+                                int index = matchPair.Key;
+                                IconPositionItem target = matchPair.Value;
                                 int currentX;
                                 int currentY;
                                 ReadItemPosition(
                                     hListView,
                                     hProcess,
-                                    indexPair.Key,
+                                    index,
                                     memPoint,
                                     out currentX,
                                     out currentY);
 
                                 if (currentX != target.X || currentY != target.Y)
                                 {
-                                    SetItemPosition(hListView, indexPair.Key, target.X, target.Y);
+                                    SetItemPosition(hListView, index, target.X, target.Y);
                                     remainingMismatch++;
                                     AuditLogger.Debug(
                                         "批量坐标写入",
@@ -399,8 +608,6 @@ namespace DesktopIconLock.Core
                                             target.Y),
                                         traceId);
                                 }
-
-                                matched.Add(indexPair.Value);
                             }
 
                             if (remainingMismatch > 0)
@@ -409,7 +616,7 @@ namespace DesktopIconLock.Core
                             }
                         }
 
-                        appliedCount = matched.Count;
+                        appliedCount = matchedMap.Count;
                         Thread.Sleep(60);
 
                         EndBulkPositioning(
@@ -420,17 +627,16 @@ namespace DesktopIconLock.Core
                         bulkPositioningEnded = true;
 
                         int verificationMismatch = 0;
-                        foreach (KeyValuePair<int, string> indexPair in indexToName)
+                        foreach (KeyValuePair<int, IconPositionItem> matchPair in matchedMap)
                         {
-                            IconPositionItem target;
-                            if (!targetPositions.TryGetValue(indexPair.Value, out target)) continue;
-
+                            int index = matchPair.Key;
+                            IconPositionItem target = matchPair.Value;
                             int currentX;
                             int currentY;
                             ReadItemPosition(
                                 hListView,
                                 hProcess,
-                                indexPair.Key,
+                                index,
                                 memPoint,
                                 out currentX,
                                 out currentY);

@@ -48,30 +48,100 @@ namespace DesktopIconLock.Core
             result.PreviousIconCount = previous.Count;
             result.CurrentIconCount = current.Count;
 
-            foreach (KeyValuePair<string, IconPositionItem> previousPair in previous)
+            Dictionary<string, List<IconPositionItem>> prevGroups =
+                new Dictionary<string, List<IconPositionItem>>(StringComparer.OrdinalIgnoreCase);
+            foreach (KeyValuePair<string, IconPositionItem> pair in previous)
             {
-                IconPositionItem currentItem;
-                if (!current.TryGetValue(previousPair.Key, out currentItem))
+                if (pair.Value == null) continue;
+                string name = IconAccessor.ExtractBaseDisplayName(pair.Key, pair.Value.DisplayName);
+                List<IconPositionItem> list;
+                if (!prevGroups.TryGetValue(name, out list))
                 {
-                    result.RemovedIconCount++;
+                    list = new List<IconPositionItem>();
+                    prevGroups[name] = list;
+                }
+                list.Add(pair.Value);
+            }
+
+            Dictionary<string, List<IconPositionItem>> currGroups =
+                new Dictionary<string, List<IconPositionItem>>(StringComparer.OrdinalIgnoreCase);
+            foreach (KeyValuePair<string, IconPositionItem> pair in current)
+            {
+                if (pair.Value == null) continue;
+                string name = IconAccessor.ExtractBaseDisplayName(pair.Key, pair.Value.DisplayName);
+                List<IconPositionItem> list;
+                if (!currGroups.TryGetValue(name, out list))
+                {
+                    list = new List<IconPositionItem>();
+                    currGroups[name] = list;
+                }
+                list.Add(pair.Value);
+            }
+
+            foreach (KeyValuePair<string, List<IconPositionItem>> pg in prevGroups)
+            {
+                string name = pg.Key;
+                List<IconPositionItem> pList = pg.Value;
+                List<IconPositionItem> cList;
+                if (!currGroups.TryGetValue(name, out cList) || cList.Count == 0)
+                {
+                    result.RemovedIconCount += pList.Count;
                     continue;
                 }
 
-                IconPositionItem previousItem = previousPair.Value;
-                if (previousItem == null ||
-                    currentItem == null ||
-                    previousItem.X != currentItem.X ||
-                    previousItem.Y != currentItem.Y)
+                if (pList.Count == 1 && cList.Count == 1)
                 {
-                    result.MovedIconCount++;
+                    if (pList[0].X != cList[0].X || pList[0].Y != cList[0].Y)
+                    {
+                        result.MovedIconCount++;
+                    }
+                }
+                else
+                {
+                    List<IconPositionItem> cPool = new List<IconPositionItem>(cList);
+                    for (int i = 0; i < pList.Count; i++)
+                    {
+                        if (cPool.Count == 0)
+                        {
+                            result.RemovedIconCount++;
+                            continue;
+                        }
+                        IconPositionItem pItem = pList[i];
+                        int bestIdx = 0;
+                        long bestDistSq = long.MaxValue;
+                        for (int c = 0; c < cPool.Count; c++)
+                        {
+                            long dx = pItem.X - cPool[c].X;
+                            long dy = pItem.Y - cPool[c].Y;
+                            long dist = dx * dx + dy * dy;
+                            if (dist < bestDistSq)
+                            {
+                                bestDistSq = dist;
+                                bestIdx = c;
+                            }
+                        }
+
+                        if (pItem.X != cPool[bestIdx].X || pItem.Y != cPool[bestIdx].Y)
+                        {
+                            result.MovedIconCount++;
+                        }
+                        cPool.RemoveAt(bestIdx);
+                    }
                 }
             }
 
-            foreach (KeyValuePair<string, IconPositionItem> currentPair in current)
+            foreach (KeyValuePair<string, List<IconPositionItem>> cg in currGroups)
             {
-                if (!previous.ContainsKey(currentPair.Key))
+                string name = cg.Key;
+                List<IconPositionItem> cList = cg.Value;
+                List<IconPositionItem> pList;
+                if (!prevGroups.TryGetValue(name, out pList))
                 {
-                    result.AddedIconCount++;
+                    result.AddedIconCount += cList.Count;
+                }
+                else if (cList.Count > pList.Count)
+                {
+                    result.AddedIconCount += (cList.Count - pList.Count);
                 }
             }
 

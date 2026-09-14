@@ -85,9 +85,11 @@ MessageBoxIcon.Error);
 };
 contextMenu.Items.Add(menuSaveExact);
 
-_menuHistory = new ToolStripMenuItem("历史布局管理");
-_menuHistory.DropDownOpening += delegate { RefreshHistoryMenu(); };
-_menuHistory.DropDownClosed += delegate { _historyPreview.HidePreview(false); };
+_menuHistory = new ToolStripMenuItem("历史布局");
+_menuHistory.Click += delegate(object s, EventArgs e)
+{
+    OpenHistoryOverviewWindow();
+};
 contextMenu.Items.Add(_menuHistory);
 
 contextMenu.Items.Add(new ToolStripSeparator());
@@ -144,98 +146,57 @@ _notifyIcon.ContextMenuStrip = contextMenu;
 RefreshHistoryMenu();
 }
 
+private void OpenHistoryOverviewWindow()
+{
+    System.Collections.Generic.List<HistoryLayoutRecord> records = _controller.GetHistoryRecords();
+    _historyPreview.ShowOverview(records);
+}
+
 private void RefreshHistoryMenu()
 {
-if (_menuHistory == null) return;
-
-_menuHistory.DropDownItems.Clear();
-System.Collections.Generic.List<HistoryLayoutRecord> records = _controller.GetHistoryRecords();
-if (records.Count == 0)
-{
-ToolStripMenuItem emptyItem = new ToolStripMenuItem("暂无历史布局");
-emptyItem.Enabled = false;
-_menuHistory.DropDownItems.Add(emptyItem);
-return;
-}
-
-for (int i = 0; i < records.Count; i++)
-{
-HistoryLayoutRecord record = records[i];
-ToolStripMenuItem item = new ToolStripMenuItem(record.MenuText);
-item.Tag = record;
-item.MouseEnter += delegate(object sender, EventArgs e)
-{
-ToolStripMenuItem hoveredItem = sender as ToolStripMenuItem;
-HistoryLayoutRecord hoveredRecord = hoveredItem != null
-? hoveredItem.Tag as HistoryLayoutRecord
-: null;
-if (hoveredRecord != null && !_historyPreview.IsPinned)
-{
-Point menuPos = _menuHistory.DropDown.Location;
-Size menuSize = _menuHistory.DropDown.Size;
-_historyPreview.ShowHoverPreview(hoveredRecord, menuPos, menuSize);
-}
-};
-item.Click += delegate(object sender, EventArgs e)
-{
-ToolStripMenuItem clickedItem = sender as ToolStripMenuItem;
-HistoryLayoutRecord clickedRecord = clickedItem != null
-? clickedItem.Tag as HistoryLayoutRecord
-: null;
-if (clickedRecord != null)
-{
-Point anchor = Cursor.Position;
-if (_notifyIcon.ContextMenuStrip != null)
-{
-_notifyIcon.ContextMenuStrip.Close();
-}
-Application.DoEvents();
-_historyPreview.PinActionPanel(clickedRecord, anchor);
-}
-};
-_menuHistory.DropDownItems.Add(item);
-}
+    if (_historyPreview != null && _historyPreview.Visible)
+    {
+        System.Collections.Generic.List<HistoryLayoutRecord> records = _controller.GetHistoryRecords();
+        _historyPreview.RefreshList(records);
+    }
 }
 
 private void OnDeleteHistoryRequested(HistoryLayoutRecord record)
 {
-DialogResult result = MessageBox.Show(
-"确定删除这条历史布局及其全桌面截图吗？\n\n" + record.MenuText,
-"删除历史布局",
-MessageBoxButtons.YesNo,
-MessageBoxIcon.Warning,
-MessageBoxDefaultButton.Button2);
-if (result != DialogResult.Yes) return;
+    DialogResult result = MessageBox.Show(
+        "确定删除这条历史布局及其全桌面截图吗？\n\n" + record.MenuText,
+        "删除历史布局",
+        MessageBoxButtons.YesNo,
+        MessageBoxIcon.Warning,
+        MessageBoxDefaultButton.Button2);
+    if (result != DialogResult.Yes) return;
 
-if (_controller.DeleteHistoryRecord(record))
-{
-_historyPreview.HidePreview(true);
-RefreshHistoryMenu();
-ShowNotification("历史布局已删除", record.MenuText);
-}
-else
-{
-MessageBox.Show(
-"历史布局删除失败，请打开日志目录查看原因。",
-"删除历史布局",
-MessageBoxButtons.OK,
-MessageBoxIcon.Error);
-}
+    if (_controller.DeleteHistoryRecord(record))
+    {
+        RefreshHistoryMenu();
+        ShowNotification("历史布局已删除", record.MenuText);
+    }
+    else
+    {
+        MessageBox.Show(
+            "历史布局删除失败，请打开日志目录查看原因。",
+            "删除历史布局",
+            MessageBoxButtons.OK,
+            MessageBoxIcon.Error);
+    }
 }
 
 private void OnSetHistoryBaseRequested(HistoryLayoutRecord record)
 {
-_controller.SetHistoryRecordAsBase(record);
-_historyPreview.HidePreview(true);
-RefreshHistoryMenu();
-ShowNotification("基准布局已更新", record.MenuText);
+    _controller.SetHistoryRecordAsBase(record);
+    RefreshHistoryMenu();
+    ShowNotification("基准布局已更新", record.MenuText);
 }
 
 private void OnApplyHistoryRequested(HistoryLayoutRecord record)
 {
-_controller.ApplyHistoryRecord(record);
-_historyPreview.HidePreview(true);
-ShowNotification("历史布局已应用", record.MenuText);
+    _controller.ApplyHistoryRecord(record);
+    ShowNotification("历史布局已应用", record.MenuText);
 }
 
 private void ToggleLock()

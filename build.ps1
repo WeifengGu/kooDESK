@@ -65,36 +65,40 @@ if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }
 
-# 4. 编译测试套件 TestRunner.exe -> dist/
+# 4. 仅在显式请求测试时才编译测试套件 TestRunner.exe
 $TestOutput = Join-Path $DistDir "TestRunner.exe"
-$TestSources = @(
-    (Join-Path $ProjectRoot "DesktopIconLock\Common\AuditLogger.cs"),
-    (Join-Path $ProjectRoot "DesktopIconLock\Native\User32.cs"),
-    (Join-Path $ProjectRoot "DesktopIconLock\Native\ShellInterop.cs"),
-    (Join-Path $ProjectRoot "DesktopIconLock\Native\DisplayInfo.cs"),
-    (Join-Path $ProjectRoot "DesktopIconLock\Core\IconAccessor.cs"),
-    (Join-Path $ProjectRoot "DesktopIconLock\Core\DesktopLayoutChangeDetector.cs"),
-    (Join-Path $ProjectRoot "DesktopIconLock\Core\DesktopLocationEventClassifier.cs"),
-    (Join-Path $ProjectRoot "DesktopIconLock\Core\LayoutStore.cs"),
-    (Join-Path $ProjectRoot "DesktopIconLock\Core\AdaptiveMapper.cs"),
-    (Join-Path $ProjectRoot "DesktopIconLock\Core\StartupManager.cs"),
-    (Join-Path $ProjectRoot "DesktopIconLock\Core\ScreenCaptureService.cs"),
-    (Join-Path $ProjectRoot "DesktopIconLock\Core\HistoryStore.cs"),
-    (Join-Path $ProjectRoot "Tests\TestRunner.cs")
-)
+if ($RunTests) {
+    $TestSources = @(
+        (Join-Path $ProjectRoot "DesktopIconLock\Common\AuditLogger.cs"),
+        (Join-Path $ProjectRoot "DesktopIconLock\Native\User32.cs"),
+        (Join-Path $ProjectRoot "DesktopIconLock\Native\ShellInterop.cs"),
+        (Join-Path $ProjectRoot "DesktopIconLock\Native\DisplayInfo.cs"),
+        (Join-Path $ProjectRoot "DesktopIconLock\Core\IconAccessor.cs"),
+        (Join-Path $ProjectRoot "DesktopIconLock\Core\DesktopLayoutChangeDetector.cs"),
+        (Join-Path $ProjectRoot "DesktopIconLock\Core\DesktopLocationEventClassifier.cs"),
+        (Join-Path $ProjectRoot "DesktopIconLock\Core\LayoutStore.cs"),
+        (Join-Path $ProjectRoot "DesktopIconLock\Core\AdaptiveMapper.cs"),
+        (Join-Path $ProjectRoot "DesktopIconLock\Core\StartupManager.cs"),
+        (Join-Path $ProjectRoot "DesktopIconLock\Core\ScreenCaptureService.cs"),
+        (Join-Path $ProjectRoot "DesktopIconLock\Core\HistoryStore.cs"),
+        (Join-Path $ProjectRoot "Tests\TestRunner.cs")
+    )
 
-Write-Host "[4/4] 正在编译测试程序 -> $TestOutput" -ForegroundColor Cyan
-& $CscPath /nologo /target:exe /optimize+ /out:"$TestOutput" /r:System.dll /r:System.Windows.Forms.dll /r:System.Drawing.dll /r:CustomMarshalers.dll $TestSources
+    Write-Host "[4/4] 正在编译测试程序 -> $TestOutput" -ForegroundColor Cyan
+    & $CscPath /nologo /target:exe /optimize+ /out:"$TestOutput" /r:System.dll /r:System.Windows.Forms.dll /r:System.Drawing.dll /r:CustomMarshalers.dll $TestSources
 
-if ($LASTEXITCODE -ne 0) {
-    Write-Error "测试程序 TestRunner.exe 编译失败。"
-    exit $LASTEXITCODE
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "测试程序 TestRunner.exe 编译失败。"
+        exit $LASTEXITCODE
+    }
 }
 
 Write-Host "`n==================================================" -ForegroundColor Green
 Write-Host "  编译成功！成品输出目录: $DistDir" -ForegroundColor Green
 Write-Host "  - $MainOutput" -ForegroundColor Green
-Write-Host "  - $TestOutput" -ForegroundColor Green
+if ($RunTests) {
+    Write-Host "  - $TestOutput" -ForegroundColor Green
+}
 Write-Host "==================================================" -ForegroundColor Green
 
 # 自动启动或执行测试

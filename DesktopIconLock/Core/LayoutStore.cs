@@ -163,7 +163,7 @@ File.WriteAllText(_configFilePath, json, Encoding.UTF8);
 
 AuditLogger.LogStorageOperation("写入主配置文件", "layout.json", string.Format("路径:{0}", _configFilePath), 1, "主配置文件更新成功", traceId);
 
-CreateBackup(json);
+// 移除根目录冗余 layout.bak.xxx.json 备份，历史与快照统一在历史布局管理中记录
 }
 catch (Exception ex)
 {
@@ -324,25 +324,6 @@ return null;
 
 private void CreateBackup(string jsonContent)
 {
-try
-{
-string timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
-string backupName = string.Format("layout.bak.{0}.json", timestamp);
-string backupPath = Path.Combine(_configDirectory, backupName);
-File.WriteAllText(backupPath, jsonContent, Encoding.UTF8);
-
-string[] bakFiles = Directory.GetFiles(_configDirectory, "layout.bak.*.json");
-if (bakFiles.Length > 5)
-{
-Array.Sort(bakFiles);
-int deleteCount = bakFiles.Length - 5;
-for (int i = 0; i < deleteCount; i++)
-{
-try { File.Delete(bakFiles[i]); } catch { }
-}
-}
-}
-catch { }
 }
 
 public static string SerializeJson(LayoutConfig config)

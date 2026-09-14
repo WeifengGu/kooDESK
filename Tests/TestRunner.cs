@@ -29,6 +29,7 @@ namespace DesktopIconLock.Tests
             Run("解锁布局变更检测", TestDesktopLayoutChangeDetection);
             Run("历史布局同模式最多5条且基准不被轮转删除", TestHistoryRetention);
             Run("历史布局截图、基准和删除", TestHistoryOperations);
+            Run("桌面同名文件图标排版防错乱与匹配", TestDuplicateNameIconHandling);
             Console.WriteLine(string.Format("RESULT {0}/{1}", passed, total));
             Environment.ExitCode = passed == total ? 0 : 1;
         }
@@ -360,6 +361,54 @@ namespace DesktopIconLock.Tests
                 DesktopLayoutChangeDetector.Compare(null, unchanged);
             Assert(unavailableResult.HasChanged, "缺少解锁快照时不应直接视为未变化");
             Assert(!unavailableResult.ComparisonAvailable, "缺少快照时比较状态错误");
+        }
+
+        static void TestDuplicateNameIconHandling()
+        {
+            Dictionary<string, IconPositionItem> targetPositions =
+                new Dictionary<string, IconPositionItem>(StringComparer.OrdinalIgnoreCase);
+            targetPositions["新建文件夹#1"] = BuildIcon("新建文件夹#1", 50, 100);
+            targetPositions["新建文件夹#1"].DisplayName = "新建文件夹";
+            targetPositions["新建文件夹#2"] = BuildIcon("新建文件夹#2", 300, 400);
+            targetPositions["新建文件夹#2"].DisplayName = "新建文件夹";
+            targetPositions["此电脑"] = BuildIcon("此电脑", 50, 50);
+
+            List<KeyValuePair<int, IconPositionItem>> desktopItems =
+                new List<KeyValuePair<int, IconPositionItem>>
+                {
+                    new KeyValuePair<int, IconPositionItem>(0, new IconPositionItem { Key = "新建文件夹", DisplayName = "新建文件夹", X = 52, Y = 98 }),
+                    new KeyValuePair<int, IconPositionItem>(1, new IconPositionItem { Key = "此电脑", DisplayName = "此电脑", X = 50, Y = 50 }),
+                    new KeyValuePair<int, IconPositionItem>(2, new IconPositionItem { Key = "新建文件夹", DisplayName = "新建文件夹", X = 305, Y = 395 })
+                };
+
+            Dictionary<int, IconPositionItem> matched =
+                IconAccessor.MatchDesktopItemsToTargets(desktopItems, targetPositions);
+            Assert(matched.Count == 3, "同名图标匹配数量不为3");
+            Assert(matched[0].Key == "新建文件夹#1" && matched[0].X == 50 && matched[0].Y == 100, "0号位未匹配到新建文件夹#1目标坐标");
+            Assert(matched[2].Key == "新建文件夹#2" && matched[2].X == 300 && matched[2].Y == 400, "2号位未匹配到新建文件夹#2目标坐标");
+            Assert(matched[1].Key == "此电脑" && matched[1].X == 50 && matched[1].Y == 50, "1号位未匹配到此电脑");
+
+            Dictionary<string, IconPositionItem> currentPositions =
+                new Dictionary<string, IconPositionItem>(StringComparer.OrdinalIgnoreCase);
+            currentPositions["新建文件夹#1"] = BuildIcon("新建文件夹#1", 50, 100);
+            currentPositions["新建文件夹#1"].DisplayName = "新建文件夹";
+            currentPositions["新建文件夹#2"] = BuildIcon("新建文件夹#2", 300, 400);
+            currentPositions["新建文件夹#2"].DisplayName = "新建文件夹";
+            currentPositions["此电脑"] = BuildIcon("此电脑", 50, 50);
+
+            IconPositionComparison cmp = IconAccessor.ComparePositions(targetPositions, currentPositions);
+            Assert(cmp.MatchedIconCount == 3, "同名图标坐标比较匹配数不为3");
+            Assert(cmp.MismatchCount == 0, "同名图标相同坐标被误判为偏差");
+
+            DesktopLayoutChangeResult changeResult =
+                DesktopLayoutChangeDetector.Compare(targetPositions, currentPositions);
+            Assert(!changeResult.HasChanged, "同名图标相同布局被误判为变更");
+
+            currentPositions["新建文件夹#2"].X = 350;
+            DesktopLayoutChangeResult movedResult =
+                DesktopLayoutChangeDetector.Compare(targetPositions, currentPositions);
+            Assert(movedResult.HasChanged, "同名图标其中一个移动未被检测到");
+            Assert(movedResult.MovedIconCount == 1, "同名图标移动统计不正确");
         }
 
         static IconPositionItem BuildIcon(string key, int x, int y)
