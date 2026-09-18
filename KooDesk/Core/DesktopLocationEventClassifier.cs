@@ -1,7 +1,7 @@
 using System;
-using DesktopIconLock.Native;
+using KooDesk.Native;
 
-namespace DesktopIconLock.Core
+namespace KooDesk.Core
 {
     public sealed class DesktopLocationEventDecision
     {
@@ -10,11 +10,6 @@ namespace DesktopIconLock.Core
         public string Reason { get; set; }
     }
 
-    /// <summary>
-    /// 将Explorer/辅助功能位置事件分成“桌面图标可能真的被移动”和“纯光标/窗口噪音”。
-    /// Windows桌面拖图标时，当前系统主要发送OBJID_CURSOR事件而不是稳定的ListView子项事件，
-    /// 因此不能只按桌面ListView句柄过滤；但也不能把每次普通鼠标移动都当成图标变化。
-    /// </summary>
     public static class DesktopLocationEventClassifier
     {
         public static DesktopLocationEventDecision Evaluate(
@@ -29,12 +24,11 @@ namespace DesktopIconLock.Core
                 new DesktopLocationEventDecision();
 
             if (expectedDesktopListView != IntPtr.Zero &&
-                hwnd == expectedDesktopListView &&
-                idObject == User32.OBJID_CLIENT &&
-                idChild > 0)
+                hwnd == expectedDesktopListView)
             {
+
                 decision.ShouldQueuePositionCheck = true;
-                decision.Reason = "收到桌面ListView具体图标项目的位置变化事件";
+                decision.Reason = "收到桌面ListView的位置变化事件";
                 return decision;
             }
 

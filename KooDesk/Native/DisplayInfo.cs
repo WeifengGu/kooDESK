@@ -4,9 +4,8 @@ using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Windows.Forms;
-using DesktopIconLock.Common;
 
-namespace DesktopIconLock.Native
+namespace KooDesk.Native
 {
     public class MonitorProfileInfo
     {
@@ -126,10 +125,6 @@ namespace DesktopIconLock.Native
             public uint dmPanningHeight;
         }
 
-        /// <summary>
-        /// 必须在创建任何 WinForms 控件或读取 Screen 之前调用。
-        /// 否则 Windows 会把 1920x1080@125% 虚拟化为 1536x864，导致布局缩放基准错误。
-        /// </summary>
         public static void EnablePerMonitorDpiAwareness()
         {
             if (_dpiAwarenessAttempted) return;
@@ -137,34 +132,16 @@ namespace DesktopIconLock.Native
 
             try
             {
-                bool result = SetProcessDpiAwarenessContext(new IntPtr(-4));
-                AuditLogger.Info(
-                    "DPI感知初始化",
-                    string.Format("请求启用Per-Monitor-V2物理像素坐标模式，系统返回={0}", result),
-                    AuditLogger.CurrentTraceId);
+                SetProcessDpiAwarenessContext(new IntPtr(-4));
             }
-            catch (Exception ex)
+            catch
             {
-                AuditLogger.LogException(
-                    "DPI感知初始化",
-                    ex.GetType().Name,
-                    ex.Message,
-                    "将使用系统可提供的最佳坐标模式",
-                    true,
-                    ex,
-                    AuditLogger.CurrentTraceId);
+
             }
         }
 
         public static List<MonitorProfileInfo> GetAllMonitors()
         {
-            string traceId = AuditLogger.CurrentTraceId;
-            AuditLogger.LogBusinessEntry(
-                "获取显示器信息",
-                "Screen.AllScreens + EnumDisplaySettings + GetDpiForMonitor",
-                "读取物理分辨率、物理工作区、真实DPI与不含分辨率的稳定显示器指纹",
-                traceId);
-
             List<MonitorProfileInfo> list = new List<MonitorProfileInfo>();
             bool isRemoteSession = IsRemoteDesktopSession();
 
@@ -204,19 +181,11 @@ namespace DesktopIconLock.Native
                     info.WorkArea = workArea;
 
                     list.Add(info);
-                    AuditLogger.Info("显示器识别", string.Format("识别到显示器: {0}", info), traceId);
                 }
             }
-            catch (Exception ex)
+            catch
             {
-                AuditLogger.LogException(
-                    "获取显示器信息",
-                    ex.GetType().Name,
-                    ex.Message,
-                    "降级为主屏幕默认参数",
-                    true,
-                    ex,
-                    traceId);
+
             }
 
             if (list.Count == 0)
@@ -243,10 +212,9 @@ namespace DesktopIconLock.Native
         {
             try
             {
-                // RDP重连时DISPLAY17、DISPLAY33等设备名会变化；
-                // 分辨率和DPI已参与Profile匹配，远程显示身份必须保持稳定。
+
                 return SystemInformation.TerminalServerSession ||
-                    GetSystemMetrics(0x1000) != 0; // SM_REMOTESESSION
+                    GetSystemMetrics(0x1000) != 0;
             }
             catch
             {

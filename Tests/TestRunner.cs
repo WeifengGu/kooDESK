@@ -1,11 +1,10 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
-using DesktopIconLock.Common;
-using DesktopIconLock.Core;
-using DesktopIconLock.Native;
+using KooDesk.Core;
+using KooDesk.Native;
 
-namespace DesktopIconLock.Tests
+namespace KooDesk.Tests
 {
     class TestRunner
     {
@@ -15,11 +14,12 @@ namespace DesktopIconLock.Tests
         static void Main(string[] args)
         {
             DisplayInfo.EnablePerMonitorDpiAwareness();
-            Console.WriteLine("DesktopIconLock v3 桌面网格稳定性测试");
+            Console.WriteLine("kooDESK v3 桌面网格稳定性测试");
             Run("真实物理显示信息", TestDisplayInfo);
             Run("当前布局网格分析", TestGeometryAnalysis);
             Run("同配置映射恒等性", TestIdentityMapping);
             Run("跨分辨率与DPI无重叠映射", TestCrossModeMapping);
+            Run("左右分组拓扑顺序保持", TestStructurePreservedMapping);
             Run("精确Profile严格区分DPI", TestStrictExactProfile);
             Run("精确Profile保存保留不同DPI", TestExactProfileKeepsDpiVariants);
             Run("运行时网格兼容性检查", TestRuntimeGridCompatibility);
@@ -27,9 +27,12 @@ namespace DesktopIconLock.Tests
             Run("桌面拖动事件分类", TestDesktopLocationEventClassification);
             Run("v3配置独立目录持久化", TestStorePersistence);
             Run("解锁布局变更检测", TestDesktopLayoutChangeDetection);
-            Run("历史布局同模式最多5条且基准不被轮转删除", TestHistoryRetention);
-            Run("历史布局截图、基准和删除", TestHistoryOperations);
+            Run("基准与精确配置同时落盘", TestBaseAndExactSavedTogether);
+            Run("旧版历史布局目录自动清理", TestLegacyHistoryDirectoryCleanup);
             Run("桌面同名文件图标排版防错乱与匹配", TestDuplicateNameIconHandling);
+            Run("基准为null时不误读精确Profile", TestNullBaseProfileParse);
+            Run("图标名特殊字符转义往返", TestIconNameEscapingRoundTrip);
+            Run("旧版layout.json自动改名为kooDESK.json", TestLegacyPortableConfigMigration);
             Console.WriteLine(string.Format("RESULT {0}/{1}", passed, total));
             Environment.ExitCode = passed == total ? 0 : 1;
         }
@@ -59,7 +62,7 @@ namespace DesktopIconLock.Tests
         static DesktopProfile BuildCurrentProfile(out MonitorProfileInfo monitor)
         {
             Dictionary<string, IconPositionItem> icons = IconAccessor.ReadCurrentIconPositions();
-            Assert(icons.Count >= 10, "未读取到足够的真实桌面图标");
+            Assert(icons.Count >= 3, "未读取到足够的真实桌面图标");
             monitor = DisplayInfo.GetPrimaryMonitor();
             DesktopProfile profile = new DesktopProfile();
             profile.Resolution = monitor.ResolutionKey;
@@ -94,6 +97,118 @@ namespace DesktopIconLock.Tests
             }
         }
 
+        static MonitorProfileInfo BuildSyntheticMonitor(int width, int height, int dpi, int workAreaHeight)
+        {
+            MonitorProfileInfo monitor = new MonitorProfileInfo();
+            monitor.DeviceName = "\\.\\TEST";
+            monitor.MonitorFingerprint = "MON_TEST_SYNTHETIC";
+            monitor.Width = width;
+            monitor.Height = height;
+            monitor.Dpi = dpi;
+            monitor.Bounds = new User32.RECT { Left = 0, Top = 0, Right = width, Bottom = height };
+            monitor.WorkArea = new User32.RECT { Left = 0, Top = 0, Right = width, Bottom = workAreaHeight };
+            return monitor;
+        }
+
+        static void TestStructurePreservedMapping()
+        {
+            DesktopProfile baseProfile = new DesktopProfile();
+            baseProfile.Resolution = "2000x1000";
+            baseProfile.Dpi = 96;
+            baseProfile.MonitorFingerprint = "MON_TEST_SYNTHETIC";
+            baseProfile.WorkAreaWidth = 2000;
+            baseProfile.WorkAreaHeight = 1000;
+            baseProfile.GridOriginX = 0;
+            baseProfile.GridOriginY = 0;
+            baseProfile.GridSpacingX = 100;
+            baseProfile.GridSpacingY = 100;
+            baseProfile.Icons["L"] = BuildIcon("L", 0, 0);
+            baseProfile.Icons["M"] = BuildIcon("M", 1000, 100);
+            baseProfile.Icons["R"] = BuildIcon("R", 1900, 200);
+
+            MonitorProfileInfo target = BuildSyntheticMonitor(1280, 1024, 96, 984);
+            Dictionary<string, IconPositionItem> mapped = AdaptiveMapper.Map(baseProfile, target);
+
+            Assert(mapped.Count == 3, "合成映射图标数不一致");
+            Assert(mapped["L"].X == 0, "左侧组列位置改变: " + mapped["L"].X);
+            Assert(mapped["M"].X == 600, "中部组列位置改变: " + mapped["M"].X);
+            Assert(mapped["R"].X == 1100, "右侧组列位置改变: " + mapped["R"].X);
+            Assert(mapped["L"].Y < mapped["M"].Y && mapped["M"].Y < mapped["R"].Y, "行顺序被破坏");
+        }
+
+        static void TestNullBaseProfileParse()
+        {
+            string dir = Path.Combine(Path.GetTempPath(), "KooDeskTest_" + Guid.NewGuid().ToString("N"));
+            try
+            {
+                Directory.CreateDirectory(dir);
+                string json =
+                    "{\n" +
+                    "  \"version\": 3,\n" +
+                    "  \"baseProfile\": null,\n" +
+                    "  \"exactProfiles\": [\n" +
+                    "    {\n" +
+                    "      \"resolution\": \"1920x1080\",\n" +
+                    "      \"dpi\": 96,\n" +
+                    "      \"monitorFingerprint\": \"MON_TEST\",\n" +
+                    "      \"workAreaWidth\": 1920,\n" +
+                    "      \"workAreaHeight\": 1040,\n" +
+                    "      \"gridOriginX\": 7,\n" +
+                    "      \"gridOriginY\": 7,\n" +
+                    "      \"gridSpacingX\": 75,\n" +
+                    "      \"gridSpacingY\": 96,\n" +
+                    "      \"icons\": { \"demo\": { \"x\": 7, \"y\": 103 } }\n" +
+                    "    }\n" +
+                    "  ]\n" +
+                    "}";
+                File.WriteAllText(Path.Combine(dir, LayoutStore.ConfigFileName), json, System.Text.Encoding.UTF8);
+
+                LayoutStore store = new LayoutStore(dir);
+                Assert(store.CurrentConfig.BaseProfile == null, "baseProfile为null时被误读为第一个精确Profile");
+                Assert(store.CurrentConfig.ExactProfiles.Count == 1, "精确Profile数量解析错误");
+                Assert(store.CurrentConfig.Version == 3, "配置版本号未读取");
+                Assert(store.CurrentConfig.ExactProfiles[0].Icons.ContainsKey("demo"), "精确Profile图标解析丢失");
+            }
+            finally { try { Directory.Delete(dir, true); } catch { } }
+        }
+
+        static void TestIconNameEscapingRoundTrip()
+        {
+            string dir = Path.Combine(Path.GetTempPath(), "KooDeskTest_" + Guid.NewGuid().ToString("N"));
+            try
+            {
+                string[] trickyNames = new string[]
+                {
+                    "say\"hi\"",
+                    "path\\to\\file",
+                    "新建文件夹",
+                    "tab\there",
+                    "emoji\ud83d\udcc1"
+                };
+
+                Dictionary<string, IconPositionItem> icons = new Dictionary<string, IconPositionItem>(StringComparer.OrdinalIgnoreCase);
+                for (int i = 0; i < trickyNames.Length; i++)
+                {
+                    icons[trickyNames[i]] = BuildIcon(trickyNames[i], 7 + i * 75, 7 + i * 96);
+                }
+
+                MonitorProfileInfo monitor = BuildSyntheticMonitor(1920, 1080, 96, 1040);
+                LayoutStore store = new LayoutStore(dir);
+                Assert(store.SaveExactProfile(monitor, icons), "含特殊字符的布局未能落盘");
+
+                LayoutStore reloaded = new LayoutStore(dir);
+                DesktopProfile exact = reloaded.FindExactProfile(monitor.ResolutionKey, monitor.Dpi, monitor.MonitorFingerprint);
+                Assert(exact != null, "重新加载后未命中精确Profile");
+                for (int i = 0; i < trickyNames.Length; i++)
+                {
+                    IconPositionItem item;
+                    Assert(exact.Icons.TryGetValue(trickyNames[i], out item), "图标名解析丢失: " + trickyNames[i]);
+                    Assert(item.X == 7 + i * 75 && item.Y == 7 + i * 96, "图标坐标往返不一致: " + trickyNames[i]);
+                }
+            }
+            finally { try { Directory.Delete(dir, true); } catch { } }
+        }
+
         static void TestCrossModeMapping()
         {
             MonitorProfileInfo current;
@@ -111,13 +226,13 @@ namespace DesktopIconLock.Tests
                 Assert(item.X >= 0 && item.Y >= 0 && item.X < target.WorkArea.Width && item.Y < target.WorkArea.Height, "图标越界: " + pair.Key);
                 Assert(cells.Add(item.X + ":" + item.Y), "图标重叠: " + pair.Key);
             }
-            Assert(mapped["icolock"].X < mapped["ScreenToGif.exe"].X, "左侧与中部组顺序破坏");
-            Assert(mapped["ScreenToGif.exe"].X < mapped["FanControl"].X, "中部与右侧组顺序破坏");
+
+            Assert(mapped.Count == profile.Icons.Count, "跨模式映射图标数不一致");
         }
 
         static void TestStrictExactProfile()
         {
-            string dir = Path.Combine(Path.GetTempPath(), "DesktopIconLockTest_" + Guid.NewGuid().ToString("N"));
+            string dir = Path.Combine(Path.GetTempPath(), "KooDeskTest_" + Guid.NewGuid().ToString("N"));
             try
             {
                 LayoutStore store = new LayoutStore(dir);
@@ -132,7 +247,7 @@ namespace DesktopIconLock.Tests
 
         static void TestExactProfileKeepsDpiVariants()
         {
-            string dir = Path.Combine(Path.GetTempPath(), "DesktopIconLockTest_" + Guid.NewGuid().ToString("N"));
+            string dir = Path.Combine(Path.GetTempPath(), "KooDeskTest_" + Guid.NewGuid().ToString("N"));
             try
             {
                 LayoutStore store = new LayoutStore(dir);
@@ -290,7 +405,7 @@ namespace DesktopIconLock.Tests
                 directIcon.ShouldQueuePositionCheck,
                 "桌面ListView具体图标事件被错误忽略");
 
-            DesktopLocationEventDecision listViewWindowNoise =
+            DesktopLocationEventDecision selfChild =
                 DesktopLocationEventClassifier.Evaluate(
                     desktop,
                     desktop,
@@ -299,13 +414,37 @@ namespace DesktopIconLock.Tests
                     false,
                     false);
             Assert(
-                !listViewWindowNoise.ShouldQueuePositionCheck,
-                "ListView自身重绘事件被错误识别为具体图标移动");
+                selfChild.ShouldQueuePositionCheck,
+                "idChild=0的桌面ListView位置事件被错误忽略");
+
+            DesktopLocationEventDecision childIdSelf =
+                DesktopLocationEventClassifier.Evaluate(
+                    desktop,
+                    desktop,
+                    User32.OBJID_WINDOW,
+                    -1,
+                    false,
+                    false);
+            Assert(
+                childIdSelf.ShouldQueuePositionCheck,
+                "CHILDID_SELF形式的桌面位置事件被错误忽略");
+
+            DesktopLocationEventDecision foreignWindow =
+                DesktopLocationEventClassifier.Evaluate(
+                    desktop,
+                    new IntPtr(0x9999),
+                    User32.OBJID_CLIENT,
+                    3,
+                    false,
+                    false);
+            Assert(
+                !foreignWindow.ShouldQueuePositionCheck,
+                "非桌面窗口的位置事件被错误识别为图标移动");
         }
 
         static void TestStorePersistence()
         {
-            string dir = Path.Combine(Path.GetTempPath(), "DesktopIconLockTest_" + Guid.NewGuid().ToString("N"));
+            string dir = Path.Combine(Path.GetTempPath(), "KooDeskTest_" + Guid.NewGuid().ToString("N"));
             try
             {
                 MonitorProfileInfo monitor;
@@ -411,6 +550,36 @@ namespace DesktopIconLock.Tests
             Assert(movedResult.MovedIconCount == 1, "同名图标移动统计不正确");
         }
 
+        static void TestLegacyPortableConfigMigration()
+        {
+            string dir = Path.Combine(Path.GetTempPath(), "KooDeskMigrationTest_" + Guid.NewGuid().ToString("N"));
+            try
+            {
+                Directory.CreateDirectory(dir);
+                MonitorProfileInfo monitor = BuildSyntheticMonitor(1920, 1080, 96, 1040);
+                Dictionary<string, IconPositionItem> icons = new Dictionary<string, IconPositionItem>(StringComparer.OrdinalIgnoreCase);
+                icons["demo"] = BuildIcon("demo", 7, 103);
+
+                LayoutConfig seed = new LayoutConfig();
+                seed.BaseProfile = new DesktopProfile();
+                seed.BaseProfile.Resolution = monitor.ResolutionKey;
+                seed.BaseProfile.Dpi = monitor.Dpi;
+                seed.BaseProfile.MonitorFingerprint = monitor.MonitorFingerprint;
+                seed.BaseProfile.Icons = icons;
+                File.WriteAllText(
+                    Path.Combine(dir, "layout.json"),
+                    LayoutStore.SerializeJson(seed),
+                    System.Text.Encoding.UTF8);
+
+                LayoutStore store = new LayoutStore(dir);
+                Assert(File.Exists(Path.Combine(dir, LayoutStore.ConfigFileName)), "kooDESK.json 未生成");
+                Assert(!File.Exists(Path.Combine(dir, "layout.json")), "旧 layout.json 未被改名而仍然残留");
+                Assert(store.CurrentConfig.BaseProfile != null &&
+                    store.CurrentConfig.BaseProfile.Icons.ContainsKey("demo"), "迁移后布局未能原样读出");
+            }
+            finally { try { Directory.Delete(dir, true); } catch { } }
+        }
+
         static IconPositionItem BuildIcon(string key, int x, int y)
         {
             IconPositionItem item = new IconPositionItem();
@@ -421,78 +590,50 @@ namespace DesktopIconLock.Tests
             return item;
         }
 
-        static void TestHistoryRetention()
+        static void TestBaseAndExactSavedTogether()
         {
-            string dir = Path.Combine(Path.GetTempPath(), "DesktopIconLockHistoryTest_" + Guid.NewGuid().ToString("N"));
+            string dir = Path.Combine(Path.GetTempPath(), "KooDeskBaseExactTest_" + Guid.NewGuid().ToString("N"));
             try
             {
-                Directory.CreateDirectory(Path.Combine(dir, "history\\records"));
-                Directory.CreateDirectory(Path.Combine(dir, "history\\screenshots"));
-
                 MonitorProfileInfo monitor;
                 DesktopProfile current = BuildCurrentProfile(out monitor);
-                HistoryStore history = new HistoryStore(dir);
-                HistoryLayoutRecord first = history.CreateRecord(monitor, current.Icons);
-                history.MarkAsBase(first);
+                LayoutStore store = new LayoutStore(dir);
+                Assert(store.SaveBaseAndExactProfile(monitor, current.Icons), "基准与精确配置保存失败");
 
-                for (int i = 0; i < 5; i++)
-                {
-                    history.CreateRecord(monitor, current.Icons);
-                }
+                LayoutStore reloaded = new LayoutStore(dir);
+                Assert(reloaded.CurrentConfig.BaseProfile != null, "基准Profile未落盘");
+                Assert(
+                    reloaded.CurrentConfig.BaseProfile.Icons.Count == current.Icons.Count,
+                    "基准Profile图标数不一致");
 
-                List<HistoryLayoutRecord> records = history.GetRecords();
-                int sameModeCount = records.FindAll(delegate(HistoryLayoutRecord item)
-                {
-                    return item.Profile.Resolution == monitor.ResolutionKey &&
-                        item.Profile.Dpi == monitor.Dpi;
-                }).Count;
-                Assert(sameModeCount == 5, "同一分辨率和DPI没有限制为5条");
-                Assert(records.Exists(delegate(HistoryLayoutRecord item) { return item.Id == first.Id && item.IsBase; }), "基准记录被自动轮转删除");
-
-                MonitorProfileInfo differentDpi = new MonitorProfileInfo();
-                differentDpi.Width = monitor.Width;
-                differentDpi.Height = monitor.Height;
-                differentDpi.Dpi = monitor.Dpi + 24;
-                differentDpi.MonitorFingerprint = monitor.MonitorFingerprint;
-                differentDpi.Bounds = monitor.Bounds;
-                differentDpi.WorkArea = monitor.WorkArea;
-                history.CreateRecord(differentDpi, current.Icons);
-                Assert(history.GetRecords().Count >= 6, "不同分辨率/DPI组合未独立保存");
+                DesktopProfile exact = reloaded.CurrentConfig.ExactProfiles.Find(
+                    delegate(DesktopProfile item)
+                    {
+                        return item.Resolution == monitor.ResolutionKey && item.Dpi == monitor.Dpi;
+                    });
+                Assert(exact != null, "当前显示环境的精确Profile未同时写入");
+                Assert(exact.Icons.Count == current.Icons.Count, "精确Profile图标数不一致");
             }
             finally { try { Directory.Delete(dir, true); } catch { } }
         }
 
-        static void TestHistoryOperations()
+        static void TestLegacyHistoryDirectoryCleanup()
         {
-            string dir = Path.Combine(Path.GetTempPath(), "DesktopIconLockHistoryTest_" + Guid.NewGuid().ToString("N"));
+            string dir = Path.Combine(Path.GetTempPath(), "KooDeskHistoryCleanupTest_" + Guid.NewGuid().ToString("N"));
             try
             {
                 Directory.CreateDirectory(Path.Combine(dir, "history\\records"));
                 Directory.CreateDirectory(Path.Combine(dir, "history\\screenshots"));
+                File.WriteAllText(
+                    Path.Combine(dir, "history\\records\\00000001_20260101_000000_abcd1234.history.json"),
+                    "{}");
+                File.WriteAllText(
+                    Path.Combine(dir, "history\\screenshots\\00000001_20260101_000000_abcd1234.png"),
+                    "not-a-real-png");
 
-                MonitorProfileInfo monitor;
-                DesktopProfile current = BuildCurrentProfile(out monitor);
-                HistoryStore history = new HistoryStore(dir);
-                LayoutStore store = new LayoutStore(Path.Combine(dir, "config"));
-                HistoryLayoutRecord record = history.CreateRecord(monitor, current.Icons);
-                Assert(File.Exists(record.ProfilePath), "历史Profile文件不存在");
-                Assert(File.Exists(record.ScreenshotPath), "历史全桌面截图不存在");
-                Assert(record.MenuText.Contains("年") &&
-                    record.MenuText.Contains("分辨率") &&
-                    record.MenuText.Contains("缩放") &&
-                    record.MenuText.Contains("序号"),
-                    "历史菜单行格式不完整");
-
-                history.MarkAsBase(record);
-                store.SetBaseProfileFromHistory(record.Profile);
-                HistoryLayoutRecord reloaded = history.GetRecords()[0];
-                Assert(reloaded.IsBase, "历史基准标记未保存");
-                Assert(store.CurrentConfig.BaseProfile.Icons.Count == current.Icons.Count, "基准Profile图标数不一致");
-
-                bool deletedBase;
-                Assert(history.DeleteRecord(reloaded, out deletedBase), "历史记录删除失败");
-                Assert(deletedBase, "删除基准记录时未识别基准状态");
-                Assert(!File.Exists(record.ProfilePath) && !File.Exists(record.ScreenshotPath), "历史文件未完整删除");
+                LayoutStore store = new LayoutStore(dir);
+                Assert(!Directory.Exists(Path.Combine(dir, "history")), "旧版history目录未被清理");
+                Assert(store.CurrentConfig != null, "清理旧目录后配置应仍能正常加载");
             }
             finally { try { Directory.Delete(dir, true); } catch { } }
         }

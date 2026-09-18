@@ -1,9 +1,8 @@
 using System;
 using System.Collections.Generic;
-using DesktopIconLock.Common;
-using DesktopIconLock.Native;
+using KooDesk.Native;
 
-namespace DesktopIconLock.Core
+namespace KooDesk.Core
 {
     public sealed class ProfileGeometryCompatibility
     {
@@ -11,10 +10,6 @@ namespace DesktopIconLock.Core
         public string Reason { get; set; }
     }
 
-    /// <summary>
-    /// 基于“网格拓扑 + 工作区归一化 + 最近空位”的结构保持型自适应引擎。
-    /// 与旧版直接缩放后从(0,0)吸附不同，本实现会保留左/中/右分组、行列顺序和边缘锚点。
-    /// </summary>
     public static class AdaptiveMapper
     {
         private class PlacementCandidate
@@ -59,10 +54,21 @@ namespace DesktopIconLock.Core
             foreach (KeyValuePair<string, IconPositionItem> pair in sourceIcons)
             {
                 IconPositionItem item = pair.Value;
+
+                if (item == null) continue;
                 xs.Add(item.X);
                 ys.Add(item.Y);
                 if (item.X < minX) minX = item.X;
                 if (item.Y < minY) minY = item.Y;
+            }
+
+            if (xs.Count == 0)
+            {
+                profile.GridOriginX = 0;
+                profile.GridOriginY = 0;
+                profile.GridSpacingX = Math.Max(48, (int)Math.Round(75.0 * profile.Dpi / 96.0));
+                profile.GridSpacingY = profile.GridSpacingX;
+                return;
             }
 
             profile.GridOriginX = Math.Max(0, minX);
@@ -74,19 +80,6 @@ namespace DesktopIconLock.Core
                 ys,
                 Math.Max(48, (int)Math.Round(96.0 * profile.Dpi / 96.0)));
 
-            AuditLogger.Info(
-                "布局网格分析",
-                string.Format(
-                    "Profile={0}, 工作区={1}x{2}, 网格原点=({3},{4}), 网格步进={5}x{6}, 图标数={7}",
-                    profile.Resolution,
-                    profile.WorkAreaWidth,
-                    profile.WorkAreaHeight,
-                    profile.GridOriginX,
-                    profile.GridOriginY,
-                    profile.GridSpacingX,
-                    profile.GridSpacingY,
-                    sourceIcons.Count),
-                AuditLogger.CurrentTraceId);
         }
 
         public static ProfileGeometryCompatibility CheckRuntimeGeometryCompatibility(
@@ -178,19 +171,16 @@ namespace DesktopIconLock.Core
             MonitorProfileInfo targetMonitor,
             DesktopProfile runtimeGeometry)
         {
-            string traceId = AuditLogger.CurrentTraceId;
             Dictionary<string, IconPositionItem> mapped =
                 new Dictionary<string, IconPositionItem>(StringComparer.OrdinalIgnoreCase);
 
             if (baseProfile == null || baseProfile.Icons == null || baseProfile.Icons.Count == 0)
             {
-                AuditLogger.LogRejected(
-                    "自适应换算",
-                    "基准Profile为空或图标数为0",
-                    400,
-                    "无法进行布局换算",
-                    "保持系统当前图标位置",
-                    traceId);
+                return mapped;
+            }
+
+            if (targetMonitor == null)
+            {
                 return mapped;
             }
 
@@ -199,7 +189,10 @@ namespace DesktopIconLock.Core
                 baseProfile.GridSpacingX <= 0 ||
                 baseProfile.GridSpacingY <= 0)
             {
-                PopulateProfileGeometry(baseProfile, null, baseProfile.Icons);
+
+                DesktopProfile resolved = LayoutStore.CloneProfile(baseProfile);
+                PopulateProfileGeometry(resolved, null, resolved.Icons);
+                baseProfile = resolved;
             }
 
             int baseDpi = Math.Max(96, baseProfile.Dpi);
@@ -260,30 +253,12 @@ namespace DesktopIconLock.Core
                 targetOriginY,
                 targetGridY);
 
-            AuditLogger.LogBusinessEntry(
-                "结构保持型自适应换算",
-                string.Format(
-                    "基准={0}@{1}% 工作区={2}x{3} 网格={4}x{5}; 目标={6}@{7}% 工作区={8}x{9} 网格={10}x{11}; 目标网格来源={12}",
-                    baseProfile.Resolution,
-                    (int)Math.Round(baseDpi * 100.0 / 96.0),
-                    baseProfile.WorkAreaWidth,
-                    baseProfile.WorkAreaHeight,
-                    baseProfile.GridSpacingX,
-                    baseProfile.GridSpacingY,
-                    targetMonitor.ResolutionKey,
-                    targetMonitor.ScalePercent,
-                    targetWorkWidth,
-                    targetWorkHeight,
-                    targetGridX,
-                    targetGridY,
-                    hasRuntimeGeometry ? "当前Explorer桌面实测坐标" : "按DPI比例推算"),
-                "把原布局的行列拓扑映射到目标可用网格，并为冲突图标寻找最近空位",
-                traceId);
-
             List<PlacementCandidate> candidates = new List<PlacementCandidate>();
             foreach (KeyValuePair<string, IconPositionItem> pair in baseProfile.Icons)
             {
                 IconPositionItem source = pair.Value;
+                if (source == null) continue;
+
                 double baseColumn = (source.X - baseProfile.GridOriginX) /
                     (double)Math.Max(1, baseProfile.GridSpacingX);
                 double baseRow = (source.Y - baseProfile.GridOriginY) /
@@ -307,7 +282,7 @@ namespace DesktopIconLock.Core
                 return left.DesiredColumn.CompareTo(right.DesiredColumn);
             });
 
-            HashSet<string> occupied = new HashSet<string>(StringComparer.Ordinal);
+            HashSet<int> occupied = new HashSet<int>();
             int collisionCount = 0;
 
             for (int i = 0; i < candidates.Count; i++)
@@ -354,39 +329,7 @@ namespace DesktopIconLock.Core
                 mappedItem.Y = y;
                 mapped[mappedItem.Key] = mappedItem;
 
-                AuditLogger.Debug(
-                    "单图标拓扑映射",
-                    string.Format(
-                        "[{0}/{1}] {2}: 原坐标=({3},{4}) 原网格≈({5:F2},{6:F2}) 目标首选=({7},{8}) 最终网格=({9},{10}) 最终坐标=({11},{12})",
-                        i + 1,
-                        candidates.Count,
-                        candidate.Source.DisplayName,
-                        candidate.Source.X,
-                        candidate.Source.Y,
-                        (candidate.Source.X - baseProfile.GridOriginX) / (double)baseProfile.GridSpacingX,
-                        (candidate.Source.Y - baseProfile.GridOriginY) / (double)baseProfile.GridSpacingY,
-                        preferredColumn,
-                        preferredRow,
-                        placedColumn,
-                        placedRow,
-                        x,
-                        y),
-                    traceId);
             }
-
-            AuditLogger.LogResponseReturn(
-                "结构保持型自适应换算",
-                200,
-                string.Format(
-                    "成功映射{0}个图标；发生{1}次网格冲突，均已移动到最近空位；目标网格容量={2}x{3}",
-                    mapped.Count,
-                    collisionCount,
-                    targetMaxColumn + 1,
-                    targetMaxRow + 1),
-                0,
-                "成功",
-                "布局的左/中/右分组和行列顺序得到保留，图标不重叠、不越界",
-                traceId);
 
             return mapped;
         }
@@ -398,7 +341,7 @@ namespace DesktopIconLock.Core
             double desiredRow,
             int maxColumn,
             int maxRow,
-            HashSet<string> occupied,
+            HashSet<int> occupied,
             out int placedColumn,
             out int placedRow)
         {
@@ -414,8 +357,7 @@ namespace DesktopIconLock.Core
 
                     double horizontalDistance = Math.Abs(column - desiredColumn);
                     double verticalDistance = Math.Abs(row - desiredRow);
-                    // 同一目标行只要还有空位，就绝不把图标挤到其它行。
-                    // 旧权重过低会导致底部WinSCP等图标被“就近”塞到顶部，破坏视觉分组。
+
                     double rowChangePenalty = (maxColumn + 1) * 2.0;
                     double score = horizontalDistance + verticalDistance * rowChangePenalty;
                     if (score < bestScore)
@@ -511,9 +453,9 @@ namespace DesktopIconLock.Core
             }
         }
 
-        private static string CellKey(int column, int row)
+        private static int CellKey(int column, int row)
         {
-            return column.ToString() + ":" + row.ToString();
+            return (row << 16) | (column & 0xFFFF);
         }
 
         private static int Clamp(int value, int minimum, int maximum)

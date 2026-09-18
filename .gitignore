@@ -1,8 +1,5 @@
-*.log
-logs/
-dist/logs/
+dist/kooDESK*.json
 dist/layout*.json
-dist/history/
 artifacts/
 *.exe
 *.pdb
@@ -13,6 +10,5 @@ bin/
 obj/
 *.tmp
 
-# 允许追踪 dist 目录下的构建规范，但忽略运行时日志与私有历史截图
 !dist/.gitkeep
-!DesktopIconLock/Config/layout.schema.json
+!KooDesk/Config/kooDESK.schema.json

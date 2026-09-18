@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
 
-namespace DesktopIconLock.Core
+namespace KooDesk.Core
 {
     public sealed class DesktopLayoutChangeResult
     {
